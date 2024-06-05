@@ -2,11 +2,17 @@ from pyscf import gto, scf, fci
 import numpy as np
 import matplotlib.pyplot as plt
 from time import time
+import subprocess as sp
 
 from openms.qmc import afqmc
 
 
+
 if __name__ == "__main__":
+
+    DATA_DIR = "02-AFQMC_H2_SCAN"
+    sp.call(f"mkdir -p {DATA_DIR}", shell=True)
+
 
     bmin = 1.0
     bmax = 6.0
@@ -40,8 +46,8 @@ if __name__ == "__main__":
         atoms = [("H", -b/2, 0, 0), ("H", b/2, 0, 0)]
         mol = gto.M(atom=atoms, basis='sto3g', unit='Bohr', verbose=3)
         # AFQMC
-        num_walkers     = 5000
-        dt              = 0.0025
+        num_walkers     = 10
+        dt              = 0.01
         total_time      = 10.0
         afqmc_obj       = afqmc.AFQMC(mol, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
@@ -60,13 +66,13 @@ if __name__ == "__main__":
 
     ### Plot all trajectories ###
     EREF = AFQMC_AVE
-    plt.imshow( E_AFQMC[:,:] - EREF[:,None], origin='lower', cmap="bwr", extent=[bmin,bmax,0,total_time], aspect='auto')
+    plt.imshow( E_AFQMC[:,:] - EREF[:,None], origin='lower', cmap="bwr", extent=[0,total_time,bmin,bmax], aspect='auto')
     plt.colorbar(pad=0.01, label="$E(\\tau) - \langle E(\\tau \\rightarrow \infty) \\rangle$" )
     plt.xlabel("H-H Bond Length (Bohr)", fontsize=15)
     plt.ylabel("Projection Time, $\\tau$ (a.u.)", fontsize=15)
     #plt.title("$E(\\tau) - \langle E(\\tau \\rightarrow \infty) \\rangle$", fontsize=15)
     plt.tight_layout()
-    plt.savefig("02-AFQMC_H2_SCAN_TRAJ.jpg",dpi=300)
+    plt.savefig(f"{DATA_DIR}/02-AFQMC_H2_SCAN_TRAJ_T_%1.0f_dt_%1.4f_Nw_%1.0f.jpg" % (total_time,dt,num_walkers),dpi=300)
     plt.clf()
 
     
@@ -80,6 +86,6 @@ if __name__ == "__main__":
     plt.legend()
     plt.xlim(bmin,bmax)
     plt.tight_layout()
-    plt.savefig("02-AFQMC_H2_SCAN.jpg", dpi=300)
+    plt.savefig(f"{DATA_DIR}/02-AFQMC_H2_SCAN_T_%1.0f_dt_%1.4f_Nw_%1.0f.jpg" % (total_time,dt,num_walkers), dpi=300)
     plt.clf()
 
