@@ -13,7 +13,7 @@ if __name__ == "__main__":
     DATA_DIR = "02-AFQMC_H2_SCAN"
     sp.call(f"mkdir -p {DATA_DIR}", shell=True)
 
-
+    basis = "sto3g"
     bmin = 1.0
     bmax = 6.0
     bond_list_coarse = np.arange( bmin,bmax+0.2,0.2 ) # Bohr
@@ -29,7 +29,7 @@ if __name__ == "__main__":
         print("Doing calculations for R(H-H) = %1.3f Bohr." % b)
 
         atoms = [("H", -b/2, 0, 0), ("H", b/2, 0, 0)]
-        mol = gto.M(atom=atoms, basis='sto3g', unit='Bohr', verbose=3)
+        mol = gto.M(atom=atoms, basis=basis, unit='Bohr', verbose=3)
 
         # HF
         mf = scf.RHF(mol)
@@ -44,14 +44,15 @@ if __name__ == "__main__":
     for bi,b in enumerate(bond_list_coarse):
         print("Doing calculations for R(H-H) = %1.3f Bohr." % b)
         atoms = [("H", -b/2, 0, 0), ("H", b/2, 0, 0)]
-        mol = gto.M(atom=atoms, basis='sto3g', unit='Bohr', verbose=3)
+        mol = gto.M(atom=atoms, basis=basis, unit='Bohr', verbose=3)
         # AFQMC
-        num_walkers     = 10
-        dt              = 0.01
+        num_walkers     = 100_000
+        dt              = 0.0001
         total_time      = 10.0
         afqmc_obj       = afqmc.AFQMC(mol, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
-        time_list.append( np.array(times) )
+        if ( bi == 0 ):
+            time_list = np.array(times) 
         E_AFQMC.append( np.array(energies) )
 
     
@@ -72,7 +73,7 @@ if __name__ == "__main__":
     plt.ylabel("Projection Time, $\\tau$ (a.u.)", fontsize=15)
     #plt.title("$E(\\tau) - \langle E(\\tau \\rightarrow \infty) \\rangle$", fontsize=15)
     plt.tight_layout()
-    plt.savefig(f"{DATA_DIR}/02-AFQMC_H2_SCAN_TRAJ_T_%1.0f_dt_%1.4f_Nw_%1.0f.jpg" % (total_time,dt,num_walkers),dpi=300)
+    plt.savefig("%s/02-AFQMC_H2_SCAN_TRAJ_T_%1.0f_dt_%1.4f_Nw_%1.0f_basis_%s.jpg" % (DATA_DIR,total_time,dt,num_walkers,basis),dpi=300)
     plt.clf()
 
     
@@ -86,6 +87,6 @@ if __name__ == "__main__":
     plt.legend()
     plt.xlim(bmin,bmax)
     plt.tight_layout()
-    plt.savefig(f"{DATA_DIR}/02-AFQMC_H2_SCAN_T_%1.0f_dt_%1.4f_Nw_%1.0f.jpg" % (total_time,dt,num_walkers), dpi=300)
+    plt.savefig("%s/02-AFQMC_H2_SCAN_T_%1.0f_dt_%1.4f_Nw_%1.0f_basis_%s.jpg" % (DATA_DIR,total_time,dt,num_walkers,basis), dpi=300)
     plt.clf()
 
