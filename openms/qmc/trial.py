@@ -33,6 +33,7 @@ class TrialWFBase(object):
                  #ne: Tuple[int, int],
                  #n_mo : int,
                  mf = None,
+                 trial = None,
                  numdets = 1,
                  numdets_props = 1,
                  numdets_chunks = 1,
@@ -40,9 +41,19 @@ class TrialWFBase(object):
 
         self.mol = mol
         if mf is None:
-            mf = scf.RHF(self.mol)
+            print( "trial", trial )
+            if ( trial == "RHF" ):
+                print("Doing restricted RHF calculation.")
+                mf = scf.RHF(self.mol)
+            elif ( trial == "UHF" ):
+                print("Doing unrestricted UHF calculation.")
+                mf = scf.UHF(self.mol)
+            else:
+                print("No trial wavefunction selected. Defaulting to RHF.")
+                mf = scf.RHF(self.mol)
             mf.kernel()
         self.mf = mf
+        
 
         #self.num_elec = num_elec # number of electrons
         #self.n_mo = n_mo
@@ -66,19 +77,32 @@ class TrialHF(TrialWFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def build(self):
+        overlap = self.mol.intor('int1e_ovlp') # AO Overlap Matrix, S
+        ao_coeff = lo.orth.lowdin(overlap) # Eigenvectors of S**(1/2)
+        xinv = np.linalg.inv(ao_coeff) # S**(-1/2)
+
+        # Compute orthogonalized MO coefficients, \tilde{C} = S**(-1/2) @ C
+        self.wf  = np.zeros_like( self.mf.mo_coeff )
+        self.wf += np.dot( xinv, self.mf.mo_coeff[:, :self.mol.nelec[0]] ) # Include only occupied orbitals
+
+# single determinant unrestricted HF trial wavefunction
+class TrialUHF(TrialWFBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
     def build(self):
+        overlap = self.mol.intor('int1e_ovlp') # AO Overlap Matrix, S
+        ao_coeff = lo.orth.lowdin(overlap) # Eigenvectors of S**(1/2)
+        xinv = np.linalg.inv(ao_coeff) # S**(-1/2)
 
-        overlap = self.mol.intor('int1e_ovlp')
-        ao_coeff = lo.orth.lowdin(overlap)
-        xinv = np.linalg.inv(ao_coeff)
+        self.wf    = np.zeros_like( self.mf.mo_coeff )
+        self.wf[0] = np.dot( xinv, self.mf.mo_coeff[0, :, :self.mol.nelec[0]] ) # ALPHA ORBITALS
+        self.wf[1] = np.dot( xinv, self.mf.mo_coeff[1, :, :self.mol.nelec[1]] ) # BETA ORBITALS
 
-        self.wf = self.mf.mo_coeff
-        self.wf = xinv.dot(self.mf.mo_coeff[:, :self.mol.nelec[0]])
 
 
 # define walker class
-
 class WalkerBase(object):
     r"""
     Walker Base class

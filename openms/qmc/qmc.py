@@ -21,7 +21,7 @@ import scipy
 import itertools
 import logging
 
-from openms.qmc.trial import TrialHF
+from openms.qmc.trial import TrialHF, TrialUHF
 from pyscf.lib import logger
 
 def read_fcidump(fname, norb):
@@ -62,6 +62,7 @@ class QMCbase(object):
     def __init__(self,
         system, # or molecule
         mf = None,
+        trial = None,
         dt = 0.005,
         nsteps = 25,
         total_time = 5.0,
@@ -101,8 +102,8 @@ class QMCbase(object):
         self.energy_scheme = energy_scheme
         self.verbose = 1
         self.stdout = sys.stdout
-
-        self.trial = None
+        
+        self.trial = trial
 
 
         # walker parameters
@@ -133,7 +134,13 @@ class QMCbase(object):
         """
         # set up trial wavefunction
         logger.info(self, "\n========  Initialize Trial WF and Walker  ======== \n")
-        if self.trial is None:
+        if ( self.trial == "RHF" ):
+            print( "A", self.trial )
+            self.trial = TrialHF(self.mol, trial=self.trial)
+        elif ( self.trial == "UHF" ):
+            self.trial = TrialUHF(self.mol, trial=self.trial)
+        if ( self.trial is None ):
+            print("No trial wfn selected. Defaulting to RHF.")
             self.trial = TrialHF(self.mol)
 
         # set up walkers
@@ -177,7 +184,9 @@ class QMCbase(object):
         return observables
 
     def walker_trial_overlap(self):
-        return np.einsum('pr, zpq->zrq', self.trial.wf.conj(), self.walker_tensors)
+        print( self.trial.wf.conj()[:,:] )
+        print( self.walker_tensors[0,:,:] )
+        return np.einsum('...pr,z...pq->z...rq', self.trial.wf.conj(), self.walker_tensors)
 
     def renormalization(self):
         r"""
@@ -186,7 +195,7 @@ class QMCbase(object):
 
         ortho_walkers = np.zeros_like(self.walker_tensors)
         for idx in range(self.walker_tensors.shape[0]):
-            ortho_walkers[idx] = np.linalg.qr(self.walker_tensors[idx])[0]
+            ortho_walkers[idx] = np.linalg.qr(self.walker_tensors[idx])[0] # CHECK IF THIS WORKS FOR UHF
         self.walker_tensors = ortho_walkers
 
     def local_energy(self, ltheta, h1e, eri, trace_ltheta, gf):
@@ -240,30 +249,41 @@ class QMCbase(object):
 
         logger.info(self, "\n======== get integrals ========")
         h1e, eri, ltensor = self.get_integrals()
-        shifted_h1e = np.zeros(h1e.shape)
-        rho_mf = self.trial.wf.dot(self.trial.wf.T.conj())
-        self.mf_shift = 1j * np.einsum("npq,pq->n", ltensor, rho_mf)
+        #norbs             = len(h1e)
+        shifted_h1e       = np.zeros(h1e.shape)
+        rho_mf            = np.einsum( "...xa,...xb->...ab", self.trial.wf, self.trial.wf.conj() ) # (...) are for possibility of spin-polarization
+        self.mf_shift     = 1j * np.einsum("npq,...pq->...n", ltensor, rho_mf) # (...) are for possibility of spin-polarization
 
         for p, q in itertools.product(range(h1e.shape[0]), repeat=2):
             shifted_h1e[p, q] = h1e[p, q] - 0.5 * np.trace(eri[p, :, :, q])
-        shifted_h1e = shifted_h1e - np.einsum("n, npq->pq", self.mf_shift, 1j*ltensor)
+        shifted_h1e = shifted_h1e - np.einsum("...n, npq->...pq", self.mf_shift, 1j*ltensor) # (...) are for possibility of spin-polarization
+        self.precomputed_ltensor = np.einsum("...pr,npq->...nrq", self.trial.wf.conj(), ltensor) # (...) are for possibility of spin-polarization
 
-        self.precomputed_ltensor = np.einsum("pr, npq->nrq", self.trial.wf.conj(), ltensor)
 
         time = 0.0
         energy_list = []
         time_list = []
         while time <= self.total_time:
+            #print( "Projection Time: %1.4f of %1.4f" % (time, self.total_time) )
             dump_result = (int(time/self.dt) % self.print_freq  == 0)
+
+            print( "Shape of walker tensors", self.walker_tensors.shape)
 
             # pre-processing: prepare walker tensor
             overlap = self.walker_trial_overlap()
-            inv_overlap = np.linalg.inv(overlap)
-            theta = np.einsum("zqp, zpr->zqr", self.walker_tensors, inv_overlap)
+            print( "Shape of overlap", overlap.shape )
+            print( overlap[0] )
+            exit()
+            inv_overlap = np.linalg.inv(overlap[0,:,:])
+            print( "Shape of inv overlap", inv_overlap.shape )
+            exit()
+            theta = np.einsum("z...qp,z...pr->z...qr", self.walker_tensors, inv_overlap)
 
-            gf = np.einsum("zqr, pr->zpq", theta, self.trial.wf.conj())
-            ltheta = np.einsum('npq, zqr->znpr', self.precomputed_ltensor, theta)
-            trace_ltheta = np.einsum('znpp->zn', ltheta)
+            gf = np.einsum("z...qr,...pr->z...pq", theta, self.trial.wf.conj())
+            ltheta = np.einsum('...npq,z...qr->z...npr', self.precomputed_ltensor, theta)
+            trace_ltheta = np.einsum('z...npp->z...n', ltheta)
+
+            exit()
 
             # compute local energy for each walker
             local_energy = self.local_energy(ltheta, h1e, eri, trace_ltheta, gf)
