@@ -70,24 +70,24 @@ class AFQMC(qmc.QMCbase):
         """
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
-        one_body_op_power = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('pq, zqr->zpr', one_body_op_power, self.walker_tensors)
+        one_body_op_power   = scipy.linalg.expm(-self.dt/2 * h1e)
+        self.walker_tensors = np.einsum('pq,zSqr->zSpr', one_body_op_power, self.walker_tensors)
 
         # 2-body propagator propagation
         # exp[(x-\bar{x}) * L]
         xi = np.random.normal(0.0, 1.0, self.nfields * self.num_walkers)
         xi = xi.reshape(self.num_walkers, self.nfields)
-        two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn, npq->zpq', xi-xbar, ltensor)
+        two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,npq->zpq', xi-xbar, ltensor)
 
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
-            temp = np.einsum('zpq, zqr->zpr', two_body_op_power, temp) / (order_i + 1.0)
+            temp = np.einsum('zpq, zSqr->zSpr', two_body_op_power, temp) / (order_i + 1.0)
             self.walker_tensors += temp
 
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
         one_body_op_power = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('pq, zqr->zpr', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('pq, zSqr->zSpr', one_body_op_power, self.walker_tensors)
         # self.walker_tensosr = np.exp(-self.dt * nuc) * self.walker_tensors
 
         # (x*\bar{x} - \bar{x}^2/2)
@@ -151,4 +151,3 @@ if __name__ == "__main__":
     ax.set_xlabel("imaginary time")
     plt.savefig("afqmc_gs1.pdf")
     #plt.show()
-
