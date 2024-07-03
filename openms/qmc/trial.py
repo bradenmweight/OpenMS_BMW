@@ -18,6 +18,7 @@
 
 import sys
 from pyscf import tools, lo, scf, fci
+from openms.mqed.qedhf import RHF as QEDRHF
 import numpy as np
 import h5py
 
@@ -34,6 +35,7 @@ class TrialWFBase(object):
                  #n_mo : int,
                  mf = None,
                  trial = None,
+                 cavity = None,
                  numdets = 1,
                  numdets_props = 1,
                  numdets_chunks = 1,
@@ -44,10 +46,17 @@ class TrialWFBase(object):
             print( "trial", trial )
             if ( trial == "RHF" ):
                 print("Doing restricted RHF calculation.")
-                mf = scf.RHF(self.mol)
+                if ( cavity is None ):
+                    mf = scf.RHF(self.mol)
+                else:
+                    mf = QEDRHF(scf.RHF(self.mol))
             elif ( trial == "UHF" ):
                 print("Doing unrestricted UHF calculation.")
-                mf = scf.UHF(self.mol)
+                if ( cavity is None ):
+                    mf = scf.UHF(self.mol)
+                else:
+                    print("\n\n\tQED-UHF is not implemented.\n\n")
+                    exit()
             else:
                 print("No trial wavefunction selected. Defaulting to RHF.")
                 mf = scf.RHF(self.mol)

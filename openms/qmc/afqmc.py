@@ -41,9 +41,9 @@ from openms.qmc import qmc
 class AFQMC(qmc.QMCbase):
 
 
-    def __init__(self, system, *args, **kwargs):
+    def __init__(self, mol, *args, **kwargs):
 
-        super().__init__(system, *args, **kwargs)
+        super().__init__(mol, *args, **kwargs)
 
     def dump_flags(self):
         r"""
@@ -97,10 +97,12 @@ class AFQMC(qmc.QMCbase):
 
 
 class QEDAFQMC(AFQMC):
+    def __init__(self, mol, 
+                 cav_freq=None, 
+                 cav_coupling=0.0, 
+                 cav_vec=np.array([0,0,0]), *args, **kwargs):
 
-    def __init__(self, system, mf, *args, **kwargs):
-
-        super().__init__(system, *args, **kwargs)
+        super().__init__(mol, *args, **kwargs)
 
         # create qed object
 
@@ -120,6 +122,7 @@ class QEDAFQMC(AFQMC):
 
 
 if __name__ == "__main__":
+    # TODO: Not updated for QED yet
     from pyscf import gto, scf, fci
     bond = 1.6
     natoms = 2

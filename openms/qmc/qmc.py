@@ -60,11 +60,12 @@ class QMCbase(object):
     Basic QMC class
     """
     def __init__(self,
-        system, # or molecule
+        mol, # or molecule
         mf = None,
         dt = 0.005,
         nsteps = 25,
         trial = None,
+        cavity = None,
         total_time = 5.0,
         num_walkers = 100,
         renorm_freq = 5,
@@ -86,7 +87,7 @@ class QMCbase(object):
            nsteps:      Number of steps per block
         """
 
-        self.system = self.mol = system
+        self.system = self.mol = mol
 
         # propagator params
         self.dt = dt
@@ -104,6 +105,7 @@ class QMCbase(object):
         self.stdout = sys.stdout
 
         self.trial = trial
+        self.cavity = cavity
 
 
         # walker parameters
@@ -136,14 +138,14 @@ class QMCbase(object):
         logger.info(self, "\n========  Initialize Trial WF and Walker  ======== \n")
         if ( self.trial == "RHF" ):
             print( "A", self.trial )
-            self.trial = TrialHF(self.mol, trial=self.trial)
+            self.trial = TrialHF(self.mol, trial=self.trial, cavity=self.cavity)
             self.spin_fac = 1.0
         elif ( self.trial == "UHF" ):
-            self.trial = TrialUHF(self.mol, trial=self.trial)
+            self.trial = TrialUHF(self.mol, trial=self.trial, cavity=self.cavity)
             self.spin_fac = 0.5
         elif ( self.trial is None ):
             print("No trial wfn selected. Defaulting to RHF.")
-            self.trial = TrialHF(self.mol)
+            self.trial = TrialHF(self.mol, trial=self.trial, cavity=self.cavity)
             self.spin_fac = 1.0
 
         # set up walkers
