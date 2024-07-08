@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
     basis = "sto3g"
     bmin = 1.0
-    bmax = 6.0
+    bmax = 10.0
     #bond_list_coarse = np.arange( bmin,bmax+0.2,0.2 ) # Bohr
     bond_list_coarse = np.arange( bmin,bmax+0.5,0.5 ) # Bohr
     #bond_list_coarse = [10.] # np.arange( bmin,bmax+0.2,0.2 ) # Bohr
@@ -56,7 +56,7 @@ if __name__ == "__main__":
         afqmc_obj       = afqmc.AFQMC(mol, numdets=1, trial="RHF", dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC.append( np.array(np.real(energies)) )
-        afqmc_obj       = afqmc.QEDAFQMC(mol, cavity_freq=np.array([0.1]), cavity_coupling=np.array([0.1]), cavity_vec=np.array([np.array([1,1,1])]), numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
+        afqmc_obj       = afqmc.QEDAFQMC(mol, cavity_freq=np.array([0.1]), cavity_coupling=np.array([0.0001]), cavity_vec=np.array([np.array([1,1,1])]), numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC_QED.append( np.array(np.real(energies)) )
         print("\n\tI did QED-AFQMC.\n")

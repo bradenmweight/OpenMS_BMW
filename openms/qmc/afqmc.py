@@ -113,12 +113,15 @@ class QEDAFQMC(AFQMC):
         TODO: 1) add DSE-mediated eri and oei
               2) bilinear coupling term (gmat)
         """
-
-
-        print("Cavity-modifed h1e is running.")
-        h1e = self.qedmf.get_hcore( self.mol ) # BMW: Does this include non-cavity ("bare") h1e terms ?
-
-        return h1e
+        h1e_QED = self.qedmf.get_hcore( self.mol )  # BMW: Does this include non-cavity ("bare") h1e terms ? 
+                                                    # BMW: YES it does.
+        #J, K    = self.qedmf.get_jk(self.mol)       # BMW: Does this include non-cavity ("bare") eri terms ?
+        #eri_QED = J + K
+        #print( "|eri_QED|", np.linalg.norm(eri_QED) )
+        print( "|h1e_QED|", np.linalg.norm(h1e_QED) )
+        exit()
+        return h1e_QED
+        #return h1e_QED#, eri_QED
 
 
     def dump_flags(self):

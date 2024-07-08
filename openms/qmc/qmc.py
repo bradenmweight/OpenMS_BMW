@@ -176,6 +176,16 @@ class QMCbase(object):
         tools.fcidump.from_mo(self.mol, ftmp.name, self.ao_coeff)
         h1e, eri, self.nuc_energy = read_fcidump(ftmp.name, norb)
 
+        if ( hasattr(self, 'cavity_freq') ):
+            #h1e += self.get_QED_integrals() # BMW: THIS IS WRONG.
+                                             # get_QED_integrals() includes bare integrals
+                                             # Would it be faster to only get the QED part ? Would need to code manually.
+            #h1e, eri = self.get_QED_integrals()
+            h1e = self.get_QED_integrals()
+
+
+
+        # BMW: Make sure to do this decomposition after the QED if-statement
         # Cholesky decomposition of eri
         eri_2d = eri.reshape((norb**2, -1))
         u, s, v = scipy.linalg.svd(eri_2d)
@@ -183,9 +193,6 @@ class QMCbase(object):
         ltensor = ltensor.T
         ltensor = ltensor.reshape(ltensor.shape[0], norb, norb)
         self.nfields = ltensor.shape[0]
-
-        if ( hasattr(self, 'cavity_freq') ):
-            h1e += self.get_QED_integrals()
 
         return h1e, eri, ltensor
 

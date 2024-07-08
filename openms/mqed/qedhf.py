@@ -523,9 +523,11 @@ class RHF(hf.RHF):
             mol = self.mol
         if dm is None:
             dm = self.make_rdm1()
-        if not omega and (
-            self._eri is not None or mol.incore_anyway or self._is_mem_enough()
-        ):
+        
+        if not omega and (   self._eri is not None \
+                          or mol.incore_anyway \
+                          or self._is_mem_enough() 
+                         ):
             if self._eri is None:
                 self._eri = mol.intor("int2e", aosym="s8")
             vj, vk = hf.dot_eri_dm(self._eri, dm, hermi, with_j, with_k)
