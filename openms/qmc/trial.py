@@ -44,6 +44,7 @@ class TrialWFBase(object):
             mf = scf.RHF(self.mol)
         mf.kernel()
         self.mf = mf
+        self.mf.dm = mf.make_rdm1()
 
         #self.num_elec = num_elec # number of electrons
         #self.n_mo = n_mo

@@ -56,7 +56,7 @@ if __name__ == "__main__":
         afqmc_obj       = afqmc.AFQMC(mol, numdets=1, trial="RHF", dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC.append( np.array(np.real(energies)) )
-        afqmc_obj       = afqmc.QEDAFQMC(mol, cavity_freq=np.array([0.1]), cavity_coupling=np.array([0.0001]), cavity_vec=np.array([np.array([1,1,1])]), numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
+        afqmc_obj       = afqmc.QEDAFQMC(mol, cavity_freq=np.array([0.1]), cavity_coupling=np.array([1e-4]), cavity_vec=np.array([np.array([1,1,1])]), numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC_QED.append( np.array(np.real(energies)) )
         print("\n\tI did QED-AFQMC.\n")

@@ -24,7 +24,6 @@ import logging
 from openms.qmc.trial import TrialHF
 from pyscf.lib import logger
 
-from openms.mqed.qedhf import RHF as QEDRHF
 
 
 def read_fcidump(fname, norb):
@@ -67,9 +66,6 @@ class QMCbase(object):
         mf = None,
         dt = 0.005,
         nsteps = 25,
-        cavity_freq = None,
-        cavity_coupling = None,
-        cavity_vec = None,
         total_time = 5.0,
         num_walkers = 100,
         renorm_freq = 5,
@@ -77,7 +73,7 @@ class QMCbase(object):
         taylor_order = 6,
         energy_scheme = None,
         batched = False,
-        *args, **kwargs):
+        **kwargs):
         r"""
 
         Args:
@@ -92,6 +88,7 @@ class QMCbase(object):
         """
 
         self.system = self.mol = mol
+        self.energy_nuc = self.mol.energy_nuc() # Store nuclear energy for entire calculation
 
         # propagator params
         self.dt = dt
@@ -107,22 +104,6 @@ class QMCbase(object):
         self.energy_scheme = energy_scheme
         self.verbose = 1
         self.stdout = sys.stdout
-
-        # Cavity Parameters
-        if ( cavity_freq is not None ):
-            self.cavity_freq     = cavity_freq
-            self.cavity_coupling = cavity_coupling
-            self.cavity_vec      = cavity_vec / np.linalg.norm( cavity_vec )
-            self.cavity_mode     = cavity_coupling * cavity_vec # To match with definition in qedhf.py -- I think coupling and vector should be separated.
-            self.qedmf           = QEDRHF(self.mol, cavity_mode=self.cavity_mode, cavity_freq=self.cavity_freq)
-            
-            print("\n")
-            print( "\tCavity Frequency = %1.4f a.u." % self.cavity_freq[0])
-            print( "\tLight-Matter Coupling (\\lambda = 1/\sqrt(2 wc) A0) = %1.4f a.u." % self.cavity_coupling[0])
-            print( "\tCavity Polarization Direction: %1.3f %1.3f %1.3f" % (self.cavity_vec[0,0], self.cavity_vec[0,1], self.cavity_vec[0,2]) )
-            print("\n")
-
-            print( hasattr(self, 'cavity_freq') ) 
 
         # walker parameters
         # TODO: move these variables into walker object
@@ -161,6 +142,27 @@ class QMCbase(object):
         self.walker_coeff = np.array([1.] * self.num_walkers)
 
 
+    def make_read_fcidump(self, norb):
+        import tempfile
+        ftmp = tempfile.NamedTemporaryFile()
+        tools.fcidump.from_mo(self.mol, ftmp.name, self.ao_coeff)
+        h1e, eri, _ = read_fcidump(ftmp.name, norb) # BMW: Nuclear energy is done elsewhere
+        return h1e, eri
+
+    def make_ltensor(self, eri, norb):
+        """
+        BMW: Make sure to do this decomposition after the QED part runs
+        Cholesky decomposition of eri
+        """
+        eri_2d = eri.reshape((norb**2, -1))
+        u, s, v = scipy.linalg.svd(eri_2d)
+        ltensor = u * np.sqrt(s)
+        ltensor = ltensor.T
+        ltensor = ltensor.reshape(ltensor.shape[0], norb, norb)
+        self.nfields = ltensor.shape[0]
+        return ltensor
+
+        
     def get_integrals(self):
         r"""
         TODO:
@@ -171,19 +173,7 @@ class QMCbase(object):
         self.ao_coeff = lo.orth.lowdin(overlap)
         norb = self.ao_coeff.shape[0]
 
-        import tempfile
-        ftmp = tempfile.NamedTemporaryFile()
-        tools.fcidump.from_mo(self.mol, ftmp.name, self.ao_coeff)
-        h1e, eri, self.nuc_energy = read_fcidump(ftmp.name, norb)
-
-        if ( hasattr(self, 'cavity_freq') ):
-            #h1e += self.get_QED_integrals() # BMW: THIS IS WRONG.
-                                             # get_QED_integrals() includes bare integrals
-                                             # Would it be faster to only get the QED part ? Would need to code manually.
-            #h1e, eri = self.get_QED_integrals()
-            h1e = self.get_QED_integrals()
-
-
+        h1e, eri = self.make_read_fcidump(norb)
 
         # BMW: Make sure to do this decomposition after the QED if-statement
         # Cholesky decomposition of eri
@@ -224,7 +214,7 @@ class QMCbase(object):
         e1   = 2 * np.einsum("zpq,pq->z",   gf, h1e)
         e2   =     np.einsum("zqs,zqs->z", tmp, gf)
 
-        energy = e1 + e2 + self.nuc_energy
+        energy = e1 + e2 + self.energy_nuc
         return energy
 
     def update_weight(self, overlap, cfb, cmf, local_energy):
