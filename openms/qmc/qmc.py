@@ -21,8 +21,11 @@ import scipy
 import itertools
 import logging
 
-from openms.qmc.trial import TrialHF, TrialUHF
+from openms.qmc.trial import TrialHF
 from pyscf.lib import logger
+
+from openms.mqed.qedhf import RHF as QEDRHF
+
 
 def read_fcidump(fname, norb):
     """
@@ -64,8 +67,9 @@ class QMCbase(object):
         mf = None,
         dt = 0.005,
         nsteps = 25,
-        trial = None,
-        cavity = None,
+        cavity_freq = None,
+        cavity_coupling = None,
+        cavity_vec = None,
         total_time = 5.0,
         num_walkers = 100,
         renorm_freq = 5,
@@ -104,9 +108,21 @@ class QMCbase(object):
         self.verbose = 1
         self.stdout = sys.stdout
 
-        self.trial = trial
-        self.cavity = cavity
+        # Cavity Parameters
+        if ( cavity_freq is not None ):
+            self.cavity_freq     = cavity_freq
+            self.cavity_coupling = cavity_coupling
+            self.cavity_vec      = cavity_vec / np.linalg.norm( cavity_vec )
+            self.cavity_mode     = cavity_coupling * cavity_vec # To match with definition in qedhf.py -- I think coupling and vector should be separated.
+            self.qedmf           = QEDRHF(self.mol, cavity_mode=self.cavity_mode, cavity_freq=self.cavity_freq)
+            
+            print("\n")
+            print( "\tCavity Frequency = %1.4f a.u." % self.cavity_freq[0])
+            print( "\tLight-Matter Coupling (\\lambda = 1/\sqrt(2 wc) A0) = %1.4f a.u." % self.cavity_coupling[0])
+            print( "\tCavity Polarization Direction: %1.3f %1.3f %1.3f" % (self.cavity_vec[0,0], self.cavity_vec[0,1], self.cavity_vec[0,2]) )
+            print("\n")
 
+            print( hasattr(self, 'cavity_freq') ) 
 
         # walker parameters
         # TODO: move these variables into walker object
@@ -136,17 +152,7 @@ class QMCbase(object):
         """
         # set up trial wavefunction
         logger.info(self, "\n========  Initialize Trial WF and Walker  ======== \n")
-        if ( self.trial == "RHF" ):
-            print( "A", self.trial )
-            self.trial = TrialHF(self.mol, trial=self.trial, cavity=self.cavity)
-            self.spin_fac = 1.0
-        elif ( self.trial == "UHF" ):
-            self.trial = TrialUHF(self.mol, trial=self.trial, cavity=self.cavity)
-            self.spin_fac = 0.5
-        elif ( self.trial is None ):
-            print("No trial wfn selected. Defaulting to RHF.")
-            self.trial = TrialHF(self.mol, trial=self.trial, cavity=self.cavity)
-            self.spin_fac = 1.0
+        self.trial = TrialHF(self.mol)
 
         # set up walkers
         # TODO: move this into walker class
@@ -178,6 +184,9 @@ class QMCbase(object):
         ltensor = ltensor.reshape(ltensor.shape[0], norb, norb)
         self.nfields = ltensor.shape[0]
 
+        if ( hasattr(self, 'cavity_freq') ):
+            h1e += self.get_QED_integrals()
+
         return h1e, eri, ltensor
 
 
@@ -189,10 +198,7 @@ class QMCbase(object):
         return observables
 
     def walker_trial_overlap(self):
-        # BMW: I want this to sum over spin, but we need to do another multiplication with wavefunction
-        #       immediately after this as 
-        #       theta = np.einsum("zSqp,zSpr->zSqr", self.walker_tensors, inv_overlap)
-        return np.einsum('Spr, zSpq->zSrq', self.trial.wf.conj(), self.walker_tensors)
+        return np.einsum('pr, zpq->zrq', self.trial.wf.conj(), self.walker_tensors)
 
     def renormalization(self):
         r"""
@@ -205,11 +211,11 @@ class QMCbase(object):
         self.walker_tensors = ortho_walkers
 
     def local_energy(self, h1e, eri, gf):
-        tmp  = 2 * np.einsum("prqs,zSpr->zSqs", eri, gf)
-        tmp -=     np.einsum("prqs,zSps->zSqr", eri, gf)
+        tmp  = 2 * np.einsum("prqs,zpr->zqs", eri, gf)
+        tmp -=     np.einsum("prqs,zps->zqr", eri, gf)
         
-        e1   = 2 * np.einsum("zSpq,pq->z",   gf, h1e)
-        e2   =     np.einsum("zSqs,zSqs->z", tmp, gf)
+        e1   = 2 * np.einsum("zpq,pq->z",   gf, h1e)
+        e2   =     np.einsum("zqs,zqs->z", tmp, gf)
 
         energy = e1 + e2 + self.nuc_energy
         return energy
@@ -221,7 +227,6 @@ class QMCbase(object):
         newoverlap = self.walker_trial_overlap()
         # be cautious! power of 2 was neglected before.
         overlap_ratio = (np.linalg.det(newoverlap) / np.linalg.det(overlap))**2
-        overlap_ratio = np.sum( overlap_ratio, axis=-1 ) # BMW: This is probably the wrong thing to do.
 
         # the hybrid energy scheme
         if self.energy_scheme == "hybrid":
@@ -258,14 +263,14 @@ class QMCbase(object):
         logger.info(self, "\n======== get integrals ========")
         h1e, eri, ltensor = self.get_integrals()
         shifted_h1e   = np.zeros(h1e.shape)
-        rho_mf        = np.einsum( "Spx,Sqx->Spq", self.trial.wf, self.trial.wf ) # rho_mf = self.trial.wf.dot(self.trial.wf.T.conj())
-        self.mf_shift = 1j * np.einsum("npq,Spq->n", ltensor, rho_mf) # Should we sum over spin S
+        rho_mf        = np.einsum( "px,qx->pq", self.trial.wf, self.trial.wf ) # rho_mf = self.trial.wf.dot(self.trial.wf.T.conj())
+        self.mf_shift = 1j * np.einsum("npq,pq->n", ltensor, rho_mf) # Should we sum over spin S
 
         for p, q in itertools.product(range(h1e.shape[0]), repeat=2):
             shifted_h1e[p, q] = h1e[p, q] - 0.5 * np.trace(eri[p, :, :, q])
         shifted_h1e = shifted_h1e - np.einsum("n,npq->pq", self.mf_shift, 1j*ltensor)
 
-        self.precomputed_ltensor = np.einsum("Spr,npq->Snrq", self.trial.wf.conj(), ltensor)
+        self.precomputed_ltensor = np.einsum("pr,npq->nrq", self.trial.wf.conj(), ltensor)
 
         time = 0.0
         energy_list = []
@@ -276,11 +281,11 @@ class QMCbase(object):
             # pre-processing: prepare walker tensor
             overlap = self.walker_trial_overlap()
             inv_overlap = np.linalg.inv(overlap)
-            theta = np.einsum("zSqp,zSpr->zSqr", self.walker_tensors, inv_overlap)
+            theta = np.einsum("zqp,zpr->zqr", self.walker_tensors, inv_overlap)
 
-            gf           = np.einsum("zSqr,Spr->zSpq", theta, self.trial.wf.conj())
-            ltheta       = np.einsum('Snpq,zSqr->zSnpr', self.precomputed_ltensor, theta)
-            trace_ltheta = np.einsum('zSnpp->zn', ltheta)
+            gf           = np.einsum("zqr,pr->zpq", theta, self.trial.wf.conj())
+            ltheta       = np.einsum('npq,zqr->znpr', self.precomputed_ltensor, theta)
+            trace_ltheta = np.einsum('znpp->zn', ltheta)
 
             # compute local energy for each walker
             local_energy = self.local_energy(h1e, eri, gf)

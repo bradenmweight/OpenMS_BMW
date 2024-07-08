@@ -34,8 +34,6 @@ class TrialWFBase(object):
                  #ne: Tuple[int, int],
                  #n_mo : int,
                  mf = None,
-                 trial = None,
-                 cavity = None,
                  numdets = 1,
                  numdets_props = 1,
                  numdets_chunks = 1,
@@ -43,24 +41,8 @@ class TrialWFBase(object):
 
         self.mol = mol
         if mf is None:
-            print( "trial", trial )
-            if ( trial == "RHF" ):
-                print("Doing restricted RHF calculation.")
-                if ( cavity is None ):
-                    mf = scf.RHF(self.mol)
-                else:
-                    mf = QEDRHF(scf.RHF(self.mol))
-            elif ( trial == "UHF" ):
-                print("Doing unrestricted UHF calculation.")
-                if ( cavity is None ):
-                    mf = scf.UHF(self.mol)
-                else:
-                    print("\n\n\tQED-UHF is not implemented.\n\n")
-                    exit()
-            else:
-                print("No trial wavefunction selected. Defaulting to RHF.")
-                mf = scf.RHF(self.mol)
-            mf.kernel()
+            mf = scf.RHF(self.mol)
+        mf.kernel()
         self.mf = mf
 
         #self.num_elec = num_elec # number of electrons
@@ -94,28 +76,6 @@ class TrialHF(TrialWFBase):
 
         self.wf = self.mf.mo_coeff
         self.wf = xinv.dot(self.mf.mo_coeff[:, :self.mol.nelec[0]])
-
-        self.wf = self.wf[None,:,:] # BMW: Add dummy dimension for spin
-
-
-# single determinant unrestricted HF trial wavefunction
-class TrialUHF(TrialWFBase):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def build(self):
-        overlap = self.mol.intor('int1e_ovlp') # AO Overlap Matrix, S
-        ao_coeff = lo.orth.lowdin(overlap) # Eigenvectors of S**(1/2)
-        xinv = np.linalg.inv(ao_coeff) # S**(-1/2)
-
-        MO_ALPHA = self.mf.mo_coeff[0, :, :self.mol.nelec[0]] # Occupied ALPHA
-        MO_BETA  = self.mf.mo_coeff[1, :, :self.mol.nelec[1]] # Occupied BETA
-        self.wf  = [np.dot( xinv, MO_ALPHA )] # ALPHA ORBITALS
-        self.wf.append(np.dot( xinv, MO_BETA )) # BETA ORBITALS
-        self.wf = np.array( self.wf )
-
-
-
 
 # define walker class
 class WalkerBase(object):

@@ -36,6 +36,7 @@ import scipy
 import h5py
 
 from openms.qmc import qmc
+#from openms.mqed.qedhf import RHF as QEDRHF
 
 
 class AFQMC(qmc.QMCbase):
@@ -71,7 +72,7 @@ class AFQMC(qmc.QMCbase):
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
         one_body_op_power   = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('pq,zSqr->zSpr', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('pq,zqr->zpr', one_body_op_power, self.walker_tensors)
 
         # 2-body propagator propagation
         # exp[(x-\bar{x}) * L]
@@ -81,13 +82,13 @@ class AFQMC(qmc.QMCbase):
 
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
-            temp = np.einsum('zpq, zSqr->zSpr', two_body_op_power, temp) / (order_i + 1.0)
+            temp = np.einsum('zpq, zqr->zpr', two_body_op_power, temp) / (order_i + 1.0)
             self.walker_tensors += temp
 
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
         one_body_op_power = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('pq, zSqr->zSpr', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('pq, zqr->zpr', one_body_op_power, self.walker_tensors)
         # self.walker_tensosr = np.exp(-self.dt * nuc) * self.walker_tensors
 
         # (x*\bar{x} - \bar{x}^2/2)
@@ -97,21 +98,27 @@ class AFQMC(qmc.QMCbase):
 
 
 class QEDAFQMC(AFQMC):
-    def __init__(self, mol, 
-                 cav_freq=None, 
-                 cav_coupling=0.0, 
-                 cav_vec=np.array([0,0,0]), *args, **kwargs):
+    def __init__(self, 
+                 mol, 
+                 *args, **kwargs):
 
         super().__init__(mol, *args, **kwargs)
 
-        # create qed object
+        # create qed mf object
+        #self.qedmf = QEDRHF(mol, *args, **kwargs)
 
-    def get_integral(self):
+
+    def get_QED_integrals(self):
         r"""
         TODO: 1) add DSE-mediated eri and oei
               2) bilinear coupling term (gmat)
         """
-        pass
+
+
+        print("Cavity-modifed h1e is running.")
+        h1e = self.qedmf.get_hcore( self.mol ) # BMW: Does this include non-cavity ("bare") h1e terms ?
+
+        return h1e
 
 
     def dump_flags(self):
