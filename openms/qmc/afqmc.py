@@ -142,7 +142,7 @@ class QEDAFQMC(AFQMC):
                                                                             # BMW: What if we wanted the dm in the QED-HF basis ? qedmf.mf.dm --> trial.mf.dm
 
         # Add the DSE-mediated eri to the eri
-        ###_, eri_QED = self.make_read_fcidump(norb) # h1e_bare, eri_bare
+        _, eri_QED = self.make_read_fcidump(norb) # h1e_bare, eri_bare
         eri_QED =  self.qedmf.mol.intor("int2e", aosym="s1") # Returns bare eri in AO basis (?)
         for mode in range( self.qedmf.qed.nmodes ):
             eri_QED += np.einsum("pq,rs->pqrs", self.qedmf.gmat[mode], self.qedmf.gmat[mode]) # gmat are in AO basis (?)
