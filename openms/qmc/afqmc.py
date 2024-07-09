@@ -37,6 +37,7 @@ import h5py
 
 
 from openms.mqed.qedhf import RHF as QEDRHF
+from openms.lib.boson import Photon
 
 from openms.qmc import qmc
 #from openms.mqed.qedhf import RHF as QEDRHF
@@ -118,7 +119,8 @@ class QEDAFQMC(AFQMC):
             self.cavity_mode     = cavity_coupling * cavity_vec # To match with definition in qedhf.py -- I think coupling and vector should be separated.
             self.qedmf           = QEDRHF(self.mol, cavity_mode=self.cavity_mode, cavity_freq=self.cavity_freq)
             self.qedmf.kernel()
-            
+            self.photon          = Photon(self.mol,self.qedmf,omega=self.cavity_freq,vec=self.cavity_vec,gfac=self.cavity_coupling)
+
             # print("\n")
             # print( "\tCavity Frequency = %1.4f a.u." % self.cavity_freq[0])
             # print( "\tLight-Matter Coupling (\\lambda = 1/\sqrt(2 wc) A0) = %1.4f a.u." % self.cavity_coupling[0])
@@ -138,19 +140,34 @@ class QEDAFQMC(AFQMC):
         self.ao_coeff   = lo.orth.lowdin(overlap)
         norb            = self.ao_coeff.shape[0]
 
-        h1e_QED = self.qedmf.get_hcore( mol=self.mol, dm=self.trial.mf.dm ) # BMW: This is he1_BARE + h1e_QED 
-                                                                            # BMW: What if we wanted the dm in the QED-HF basis ? qedmf.mf.dm --> trial.mf.dm
+        h1e_QED = self.qedmf.get_hcore( mol=self.mol, dm=self.trial.mf.dm )                       # BMW: This is he1_BARE + h1e_QED 
+                                                                                                  # BMW: What if we wanted the dm in the QED-HF basis ? qedmf.mf.dm --> trial.mf.dm
+        h1e_QED = self.ao_coeff @ h1e_QED @ self.ao_coeff.T # BMW: Rotate from AO to MO basis
 
+
+        """ # This is with built-in eri generator in AO basis. Then use gmat in AO basis to augment the eri with QED parts
         # Add the DSE-mediated eri to the eri
-        ####_, eri_QED = self.make_read_fcidump(norb) # h1e_bare, eri_bare
         eri_QED =  self.qedmf.mol.intor("int2e", aosym="s1") # Returns bare eri in AO basis (?)
         for mode in range( self.qedmf.qed.nmodes ):
             eri_QED += np.einsum("pq,rs->pqrs", self.qedmf.gmat[mode], self.qedmf.gmat[mode]) # gmat are in AO basis (?)
         eri_QED = ao2mo.general(eri_QED, np.array([self.trial.mf.mo_coeff,]*4), compact=False) # BMW: What if we wanted the gmat in the QED-HF basis ? self.qedmf.mo_coeff --> trial.wf
         eri_QED = eri_QED.reshape( [norb,]*4 )
+        """
+
+        # This is the fcidump way of doing things. Everything here is already in MO basis
+        self.photon.get_gmat_so() # Construct gmat in MO basis
+        gmat       = self.photon.gmatso # Make local variable for it
+        h1e, eri_QED = self.make_read_fcidump( norb )
+        NKEEP_MOs  = eri_QED.shape[0]
+        for mode in range( self.qedmf.qed.nmodes ):
+            eri_QED += np.einsum("pq,rs->pqrs", gmat[mode,:NKEEP_MOs,:NKEEP_MOs], gmat[mode,:NKEEP_MOs,:NKEEP_MOs])
+
 
         ltensor = self.make_ltensor( eri_QED, norb )
         return h1e_QED, eri_QED, ltensor
+
+
+
 
 
     def dump_flags(self):
@@ -158,6 +175,8 @@ class QEDAFQMC(AFQMC):
         Dump flags
         """
         print(f"\n========  QED-AFQMC simulation using OpenMS package ========\n")
+
+
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from time import time
 import subprocess as sp
 
+from openms import mqed
 from openms.qmc import afqmc
 
 
@@ -26,6 +27,7 @@ if __name__ == "__main__":
     E_AFQMC     = []
     E_AFQMC_QED = []
     E_HF        = np.zeros( len(bond_list_fine) )
+    E_QEDHF     = np.zeros( len(bond_list_coarse) )
     E_FCI       = np.zeros( len(bond_list_fine) )
 
     print("\n\tDoing HF and FCI calculations on a fine grid.")
@@ -36,37 +38,52 @@ if __name__ == "__main__":
         mol = gto.M(atom=atoms, basis=basis, unit='Bohr', verbose=3)
 
         # HF
-        mf = scf.RHF(mol)
+        mf       = scf.RHF(mol)
         E_HF[bi] = mf.kernel()
+        #dm       = mf.make_rdm1()
 
         # FCI
         fcisolver = fci.FCI(mf)
         E_FCI[bi] = fcisolver.kernel()[0]
 
-
     print("\n\tDoing AFQMC calculations on a coarse grid.")
     for bi,b in enumerate(bond_list_coarse):
-        print("Doing calculations for R(H-H) = %1.3f Bohr." % b)
+        print("\n\n\tDoing calculations for R(H-H) = %1.3f Bohr." % b)
         atoms = [("H", -b/2, 0, 0), ("H", b/2, 0, 0)]
         mol = gto.M(atom=atoms, basis=basis, unit='Bohr', verbose=3)
-        # AFQMC
-        num_walkers     = 1000 # 5000
+
+        # Cavity parameters
+        cavity_freq     = np.array([20/27.2114])
+        cavity_coupling = 0.1 # np.sqrt(2*cavity_freq) * 0.1 # Convert from A0 to lambda coupling
+        cavity_vec      = np.array([np.array([1,0,0])])
+        cavity_mode     = np.einsum("m,md->md", cavity_coupling, cavity_vec ) / np.linalg.norm(cavity_vec)
+
+        # QED-HF
+        qedmf = mqed.HF(mol, xc=None, cavity_mode=cavity_mode, cavity_freq=cavity_freq)
+        qedmf.max_cycle = 500
+        #qedmf.kernel(dm0=dm) # Supply initial guess for QED-HF from HF
+        E_QEDHF[bi] = qedmf.kernel()
+
+        # QMC params
+        num_walkers     = 5000 # 5000 is converged for this system
         dt              = 0.1
         total_time      = 10.0
+        
+        # AFQMC
         afqmc_obj       = afqmc.AFQMC(mol, numdets=1, trial="RHF", dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC.append( np.array(np.real(energies)) )
-        afqmc_obj       = afqmc.QEDAFQMC(mol, cavity_freq=np.array([0.1]), cavity_coupling=np.array([1e-4]), cavity_vec=np.array([np.array([1,1,1])]), numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
+        
+        # QED-AFQMC
+        afqmc_obj       = afqmc.QEDAFQMC(mol, cavity_freq=cavity_freq, cavity_coupling=cavity_coupling, cavity_vec=cavity_vec, numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC_QED.append( np.array(np.real(energies)) )
-        print("\n\tI did QED-AFQMC.\n")
         
         print( "AFQMC Energy: %1.6f" % np.average(E_AFQMC[-1][len(times)//4:], axis=-1) )
         print( "QED-AFQMC Energy: %1.6f" % np.average(E_AFQMC_QED[-1][len(times)//4:], axis=-1) )
     
         if ( bi == 0 ):
             time_list = np.array(times)
-
 
 
 
@@ -85,23 +102,11 @@ if __name__ == "__main__":
     AFQMC_STD_QED = np.std(E_AFQMC_QED, axis=-1) # Since this is a biased walk, we also need to add correlated error TODO
     
 
-    ### Plot all trajectories ###
-    # EREF = AFQMC_AVE
-    # plt.imshow( E_AFQMC[:,:] - EREF[:,None], origin='lower', cmap="bwr", extent=[0,total_time,bmin,bmax], aspect='auto')
-    # plt.colorbar(pad=0.01, label="$E(\\tau) - \\langle E(\\tau \\rightarrow \\infty) \\rangle$" )
-    # plt.xlabel("H-H Bond Length (Bohr)", fontsize=15)
-    # plt.ylabel("Projection Time, $\\tau$ (a.u.)", fontsize=15)
-    # #plt.title("$E(\\tau) - \langle E(\\tau \\rightarrow \infty) \\rangle$", fontsize=15)
-    # plt.tight_layout()
-    # plt.savefig("%s/02-AFQMC_H2_SCAN_TRAJ_T_%1.0f_dt_%1.4f_Nw_%1.0f_basis_%s.jpg" % (DATA_DIR,total_time,dt,num_walkers,basis),dpi=300)
-    # plt.clf()
-
-    
-
-    plt.errorbar(bond_list_coarse, AFQMC_AVE, yerr=AFQMC_STD, fmt='-o', elinewidth=1, ecolor='black', capsize=2, c='black', mfc='black', label="AFQMC")
-    plt.errorbar(bond_list_coarse, AFQMC_AVE_QED, yerr=AFQMC_STD, fmt='--s', elinewidth=1, ecolor='red', capsize=2, c='red', mfc='red', label="QED-AFQMC")
-    plt.plot(bond_list_fine, E_HF , '--', c='blue', lw=2, label="HF")
-    plt.plot(bond_list_fine, E_FCI, '--', c='green', lw=2, label="FCI")
+    plt.errorbar(bond_list_coarse, AFQMC_AVE, yerr=AFQMC_STD, fmt='o', elinewidth=1, ecolor='black', capsize=2, c='black', mfc='black', label="AFQMC")
+    plt.errorbar(bond_list_coarse, AFQMC_AVE_QED, yerr=AFQMC_STD, fmt='s', elinewidth=1, ecolor='black', capsize=2, c='black', mfc='black', label="QED-AFQMC")
+    plt.plot(bond_list_fine, E_HF , '-', c='red', lw=2, label="HF")
+    plt.plot(bond_list_coarse, E_QEDHF , 's', c='red', lw=2, label="QED-HF")
+    plt.plot(bond_list_fine, E_FCI, '-', c='blue', lw=2, label="FCI")
     plt.xlabel("H-H Bond Length (Bohr)", fontsize=15)
     plt.ylabel("Energy (a.u.)", fontsize=15)
     plt.title("$T$ = %1.3f a.u.,  $d\\tau$ = %1.3f a.u.,  $N_\\mathrm{w}$ = %1.0f" % (total_time, dt, num_walkers), fontsize=15)

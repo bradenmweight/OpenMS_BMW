@@ -22,6 +22,7 @@ import itertools
 import logging
 
 from openms.qmc.trial import TrialHF
+from openms import runtime_refs, _citations
 from pyscf.lib import logger
 
 
@@ -86,6 +87,8 @@ class QMCbase(object):
            nblocks:     Number of blocks
            nsteps:      Number of steps per block
         """
+        if ( _citations["pra2024"] not in runtime_refs ):
+            runtime_refs.append(_citations["pra2024"])
 
         self.system = self.mol = mol
         self.energy_nuc = self.mol.energy_nuc() # Store nuclear energy for entire calculation
@@ -172,18 +175,9 @@ class QMCbase(object):
         overlap = self.mol.intor('int1e_ovlp')
         self.ao_coeff = lo.orth.lowdin(overlap)
         norb = self.ao_coeff.shape[0]
-
         h1e, eri = self.make_read_fcidump(norb)
 
-        # BMW: Make sure to do this decomposition after the QED if-statement
-        # Cholesky decomposition of eri
-        eri_2d = eri.reshape((norb**2, -1))
-        u, s, v = scipy.linalg.svd(eri_2d)
-        ltensor = u * np.sqrt(s)
-        ltensor = ltensor.T
-        ltensor = ltensor.reshape(ltensor.shape[0], norb, norb)
-        self.nfields = ltensor.shape[0]
-
+        ltensor = self.make_ltensor(eri, norb)
         return h1e, eri, ltensor
 
 
@@ -307,5 +301,21 @@ class QMCbase(object):
                 logger.info(self, f" Time: {time:9.3f}    Energy: {energy:15.8f}")
 
             time += self.dt
+        
+        #self.post_kernel()
 
         return time_list, energy_list
+
+
+
+    # def post_kernel(self):
+    #     r"""
+    #     Use the post kernel to print citation informations
+    #     """
+    #     breakline = '='*80
+    #     print(f"\n{breakline}")
+    #     print(f"*  Cheers, the job is done!\n")
+    #     print(f"Citations:")
+    #     for i, citation in enumerate(runtime_refs):
+    #         print(f"[{i+1}]. {citation}")
+    #     print(f"{breakline}\n")

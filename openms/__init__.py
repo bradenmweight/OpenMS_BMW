@@ -95,6 +95,11 @@ _citations["pccp2023"] = textwrap.dedent(f"""\
 {" " * 4}     chemistry: current and future. Phys. Chem. Chem. Phys., 25, 31554 (2023).
 """)
 
+_citations["pra2024"] = textwrap.dedent(f"""\
+{" " * 4} BM Weight, S Tretiak, Y Zhang, Diffusion quantum Monte Carlo approach to the 
+{" " * 4}     polaritonic ground state. Phys. Rev. A 109, 032804 (2024).
+""")
+
 # create a emtpy citation dict to store the citation for each job
 runtime_refs = []
 
