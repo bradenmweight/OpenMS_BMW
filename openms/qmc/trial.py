@@ -76,17 +76,15 @@ class TrialHF(TrialWFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-
     def build(self):
-
-        overlap = self.mol.intor('int1e_ovlp')
+        overlap  = self.mol.intor('int1e_ovlp')
         ao_coeff = lo.orth.lowdin(overlap)
-        xinv = np.linalg.inv(ao_coeff)
+        xinv     = np.linalg.inv(ao_coeff)
 
-        self.wf = self.mf.mo_coeff
-        self.wf = xinv.dot(self.mf.mo_coeff[:, :self.mol.nelec[0]])
+        self.wf  = self.mf.mo_coeff
+        self.wf  = xinv.dot(self.mf.mo_coeff[:, :self.mol.nelec[0]])
 
-        self.wf = self.wf[None,:,:] # BMW: Add dummy dimension for spin
+        self.wf  = self.wf[None,:,:] # BMW: Add dummy dimension for spin
 
 
 # single determinant unrestricted HF trial wavefunction
@@ -103,7 +101,7 @@ class TrialUHF(TrialWFBase):
         MO_BETA  = self.mf.mo_coeff[1, :, :self.mol.nelec[1]] # Occupied BETA
         self.wf  = [np.dot( xinv, MO_ALPHA )] # ALPHA ORBITALS
         self.wf.append(np.dot( xinv, MO_BETA )) # BETA ORBITALS
-        self.wf = np.array( self.wf )
+        self.wf  = np.array( self.wf )
 
 
 

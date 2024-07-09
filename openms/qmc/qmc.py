@@ -256,8 +256,15 @@ class QMCbase(object):
         logger.info(self, "\n======== get integrals ========")
         h1e, eri, ltensor = self.get_integrals()
         shifted_h1e   = np.zeros(h1e.shape)
+
         rho_mf        = np.einsum( "Spx,Sqx->Spq", self.trial.wf, self.trial.wf ) # rho_mf = self.trial.wf.dot(self.trial.wf.T.conj())
+        
+        
         self.mf_shift = 1j * np.einsum("npq,Spq->n", ltensor, rho_mf) # Should we sum over spin S
+
+
+
+
 
         for p, q in itertools.product(range(h1e.shape[0]), repeat=2):
             shifted_h1e[p, q] = h1e[p, q] - 0.5 * np.trace(eri[p, :, :, q])
