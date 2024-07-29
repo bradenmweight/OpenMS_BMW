@@ -45,13 +45,19 @@ class TrialWFBase(object):
             if ( trial == "RHF" ):
                 print("Doing restricted RHF calculation.")
                 mf = scf.RHF(self.mol)
+                mf.kernel()
             elif ( trial == "UHF" ):
                 print("Doing unrestricted UHF calculation.")
-                mf = scf.UHF(self.mol)
+                # UHF -- BMW: Need to break symmetry of initial guess to get right solution
+                mf = scf.UHF(mol)
+                dm_alpha, dm_beta = mf.get_init_guess()
+                dm_beta[:2,:2] = 0 # BMW: Set some of the beta coefficients to zero to break alpha/beta symmetry
+                dm = (dm_alpha,dm_beta)
+                mf.kernel(dm) # BMW: Pass in modified initial guess
             else:
                 print("No trial wavefunction selected. Defaulting to RHF.")
                 mf = scf.RHF(self.mol)
-            mf.kernel()
+                mf.kernel()
         self.mf = mf
 
         #self.num_elec = num_elec # number of electrons
@@ -87,6 +93,7 @@ class TrialHF(TrialWFBase):
         self.wf  = self.wf[None,:,:] # BMW: Add dummy dimension for spin
 
 
+### Braden M. Weight ###
 # single determinant unrestricted HF trial wavefunction
 class TrialUHF(TrialWFBase):
     def __init__(self, *args, **kwargs):
@@ -97,11 +104,11 @@ class TrialUHF(TrialWFBase):
         ao_coeff = lo.orth.lowdin(overlap) # Eigenvectors of S**(1/2)
         xinv = np.linalg.inv(ao_coeff) # S**(-1/2)
 
-        MO_ALPHA = self.mf.mo_coeff[0, :, :self.mol.nelec[0]] # Occupied ALPHA
-        MO_BETA  = self.mf.mo_coeff[1, :, :self.mol.nelec[1]] # Occupied BETA
-        self.wf  = [np.dot( xinv, MO_ALPHA )] # ALPHA ORBITALS
-        self.wf.append(np.dot( xinv, MO_BETA )) # BETA ORBITALS
-        self.wf  = np.array( self.wf )
+        MO_ALPHA = self.mf.mo_coeff[0, :, :self.mol.nelec[0]] # Occupied ALPHA MO Coeffs
+        MO_BETA  = self.mf.mo_coeff[1, :, :self.mol.nelec[1]] # Occupied BETA MO Coeffs
+        self.wf  = [np.dot( xinv, MO_ALPHA )] # ALPHA ORBITALS AFTER LOWDIN ORTHOGONALIZATION
+        self.wf.append(np.dot( xinv, MO_BETA )) # BETA ORBITALS AFTER LOWDIN ORTHOGONALIZATION
+        self.wf  = np.array( self.wf ) # self.wf.shape = (spin, nocc mos per spin, nAOs)
 
 
 

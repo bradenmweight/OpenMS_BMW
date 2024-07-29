@@ -187,10 +187,20 @@ class QMCbase(object):
         return observables
 
     def walker_trial_overlap(self):
-        # BMW: I want this to sum over spin, but we need to do another multiplication with wavefunction
-        #       immediately after this as 
-        #       theta = np.einsum("zSqp,zSpr->zSqr", self.walker_tensors, inv_overlap)
-        return np.einsum('Spr, zSpq->zSrq', self.trial.wf.conj(), self.walker_tensors)
+        # BMW:
+        # I originally wanted this to sum over spin, 
+        #   but we need to do another multiplication with wavefunction immediately after this: 
+        #   e.g., theta = np.einsum("zSqp,zSpr->zSqr", self.walker_tensors, inv_overlap)
+        # (j,k) are MO labels; (a,b) are AO labels; z is the walker label; S is the spin label
+        
+        # BMW:
+        # Also, I believe that overlaps of determinants are determinants of the overlaps
+        # <TRIAL|psi> = det(TRIAL_UP psi_UP) * det(TRIAL_DOWN psi_DOWN)
+        # So how can we compute overlaps with only the knowledge of the wavefunction dot products ?
+        # Does it have something to do with our Lowdin orthogonalization, which eliminates the need for determinants ?
+
+        #return np.einsum('pr,zpq->zrq', self.trial.wf.conj(), self.walker_tensors) # Original: Yu Zhang
+        return np.einsum('Saj,zSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # shape = (Nwalkers,spin,NMO,NMO)
 
     def renormalization(self):
         r"""
@@ -202,15 +212,33 @@ class QMCbase(object):
             ortho_walkers[idx] = np.linalg.qr(self.walker_tensors[idx])[0]
         self.walker_tensors = ortho_walkers
 
-    def local_energy(self, h1e, eri, gf):
-        tmp  = 2 * np.einsum("prqs,zSpr->zSqs", eri, gf)
-        tmp -=     np.einsum("prqs,zSps->zSqr", eri, gf)
+    def local_energy_YuZhang(self, h1e, eri, G1p):
+        tmp  = 2 * np.einsum("prqs,zSpr->zSqs", eri, G1p)
+        tmp -=     np.einsum("prqs,zSps->zSqr", eri, G1p)
         
-        e1   = 2 * np.einsum("zSpq,pq->z",   gf, h1e)
-        e2   =     np.einsum("zSqs,zSqs->z", tmp, gf)
+        e1   = 2 * np.einsum("zSpq,pq->z",   G1p, h1e)
+        e2   =     np.einsum("zSqs,zSqs->z", tmp, G1p)
 
         energy = e1 + e2 + self.nuc_energy
         return energy
+
+    def local_energy(self, h1e, eri, G1p, L_n, lTheta, ltensor):
+        # BMW:
+        # Is this the same factors with and without spin ?
+        # Eq. 72-74, J. Chem. Phys. 154, 024107 (2021)
+
+        # One-body Terms
+        e1   = 2 * np.einsum("zSjk,jk->z", G1p, h1e)
+
+        # Two-body Terms
+        Hartree   = np.einsum("zn->z", L_n**2 )
+        tmp       = np.einsum("zSnjk,zSnkl->zSnjl", lTheta, lTheta ) # Eq. 74, J. Chem. Phys. 154, 024107 (2021)
+        Exchange  = np.einsum("zSnjj->z", tmp)
+        e2        = 0.5 * (Hartree - Exchange)
+
+        energy = e1 + e2 + self.nuc_energy
+        return energy
+
 
     def update_weight(self, overlap, cfb, cmf, local_energy):
         r"""
@@ -219,7 +247,7 @@ class QMCbase(object):
         newoverlap = self.walker_trial_overlap()
         # be cautious! power of 2 was neglected before.
         overlap_ratio = (np.linalg.det(newoverlap) / np.linalg.det(overlap))**2
-        overlap_ratio = np.sum( overlap_ratio, axis=-1 ) # BMW: This is probably the wrong thing to do.
+        overlap_ratio = np.sum( overlap_ratio, axis=1 ) # BMW: Sum over spin here
 
         # the hybrid energy scheme
         if self.energy_scheme == "hybrid":
@@ -254,23 +282,63 @@ class QMCbase(object):
         np.random.seed(self.random_seed)
 
         logger.info(self, "\n======== get integrals ========")
-        h1e, eri, ltensor = self.get_integrals()
-        shifted_h1e   = np.zeros(h1e.shape)
 
-        rho_mf        = np.einsum( "Spx,Sqx->Spq", self.trial.wf, self.trial.wf ) # rho_mf = self.trial.wf.dot(self.trial.wf.T.conj())
+        # BMW 
+        # The values of h1e, eri, and ltensor do not depend on spin-polarization
+        # However, do we need to duplicate the above integrals for spin-dependent shape ?
+        # The off-diagonal blocks of each should be zero, so we only need one additional label S
+        # e.g., h1e.shape = (NAO,NAO) --> h1e.shape = (S,NAO,NAO)
+        # e.g., eri.shape = (NAO,NAO,NAO,NAO) --> eri.shape = (S,NAO,NAO,NAO,NAO)
+        # If we are just duplicating the values, we don't need to add the label. Einsum can handle it.
+        h1e, eri, ltensor = self.get_integrals() # (NAO,NAO), (NAO,NAO,NAO,NAO), (NAO**2,NAO,NAO)
+
+        # BMW
+        # Defined spin-resolved density matrix in AO basis: <a|rho_mf|b>
+        # We enforce that the off-diagonal blocks (between spins) are zero by including only one spin label S
+        # Note: .conj() is not required since we only have real-valued wavefunctions in PySCF
+        # Note: Here, and in future, (j,k) are MOs while (a,b) are AO basis
+        rho_mf = np.einsum( "Saj,Sbj->Sab", self.trial.wf.conj(), self.trial.wf )
         
-        
-        self.mf_shift = 1j * np.einsum("npq,Spq->n", ltensor, rho_mf) # Should we sum over spin S
+        # BMW:
+        # Contruct the mean-field shift term (Eq. 7,8 from J. Chem. Phys. 124, 224101 2006)
+        # <v_n> = <TRIAL| \hat{v}_n |TRIAL> = Tr[ \hat{v}_n \rho_mf ]
+        # \hat{v} are the effective one-body operators of the two-body term
+        # \rho_mf is the mean-field density matrix
+        # "ab,ab" = Tr[A.T @ B]
+        self.mf_shift = 1j * np.einsum("nab,Sab->n", ltensor, rho_mf) # Should we sum over spin S ? Yes, <...> is a number
 
 
-
-
-
-        for p, q in itertools.product(range(h1e.shape[0]), repeat=2):
+        # BMW
+        # I don't understand the purpose of this operation. Maybe because I am not electronic structure person.
+        # I don't see this step in any of the AFQMC references that I am looking at.
+        # Furthermore, why are we using the eri at all anymore ?
+        # If I remove this line, the code breaks. 
+        # Are we not double counting the eri/ltensor terms somehow ?
+        shifted_h1e = np.zeros(h1e.shape)
+        for p, q in itertools.product(range(h1e.shape[0]), repeat=2): # Equivalent to nested for-loop
             shifted_h1e[p, q] = h1e[p, q] - 0.5 * np.trace(eri[p, :, :, q])
+        
+        # BMW
+        # Eqns. 18-19, J. Chem. Phys. 154, 024107 (2021)
+        # Here, we relocate the one-body terms of the two-body Hamiltonian into the one-body Hamiltonian
         shifted_h1e = shifted_h1e - np.einsum("n,npq->pq", self.mf_shift, 1j*ltensor)
 
-        self.precomputed_ltensor = np.einsum("Spr,npq->Snrq", self.trial.wf.conj(), ltensor)
+        # BMW:
+        # Precompute the action of the trial wfn on the ltensor -- not a time-dependent thing
+        # We need this object to construct the one-particle density matrix and the force bias
+        # Eq. 65-69, J. Chem. Phys. 154, 024107 (2021)
+        # G_ij^S = <TRIAL|a_j^\dag a_k|psi_k> / <TRIAL|psi_k>      
+        #        = [ <psi_k| (<TRIAL|psi_k>)^{-1}|TRIAL>]_{ji}
+        #        = [ |THETA><TRIAL| ]_{ji}
+        # <F_n>  = \sqrt(dt) Tr[\hat{L}_n \hat{G}]
+        #        = \sqrt(dt) Tr[(<TRIAL|\hat{L}_n) THETA]
+        # THETA  = <psi_k|(<TRIAL|psi_k>)^{-1}
+        # The final shape of this operation is seemingly (spin,Ntensors,NMO,NAO), a rectangular matrix
+        # wf.shape = (NAO,NMO), ltensor.shape = (S,NAO**2,NAO,NAO)
+        # Note: (j,k) are MOs while (a,b) are AO basis
+        #self.precomputed_ltensor = np.einsum("Spr,npq->Snrq", self.trial.wf.conj(), ltensor) # Original by Yu Zhang, shape = (spin,Ntensors,NMO,NAO)
+        self.precomputed_ltensor = np.einsum("Saj,nab->Snjb", self.trial.wf.conj(), ltensor) # Same as original
+
 
         time = 0.0
         energy_list = []
@@ -279,23 +347,28 @@ class QMCbase(object):
             dump_result = (int(time/self.dt) % self.print_freq  == 0)
 
             # pre-processing: prepare walker tensor
-            overlap = self.walker_trial_overlap()
-            inv_overlap = np.linalg.inv(overlap)
-            theta = np.einsum("zSqp,zSpr->zSqr", self.walker_tensors, inv_overlap)
-
-            gf           = np.einsum("zSqr,Spr->zSpq", theta, self.trial.wf.conj())
-            ltheta       = np.einsum('Snpq,zSqr->zSnpr', self.precomputed_ltensor, theta)
-            trace_ltheta = np.einsum('zSnpp->zn', ltheta)
+            overlap      = self.walker_trial_overlap() # shape = (Nwalkers,spin,NMO,NMO)
+            inv_overlap  = np.linalg.inv(overlap)      # shape = (Nwalkers,spin,NMO,NMO)
+            
+            # BMW:
+            # Compute the force bias: F_n = \sqrt(dt) <L_n> = \sqrt(dt) Tr[\hat{L}_n \hat{G}]
+            # Eq. 65-69, J. Chem. Phys. 154, 024107 (2021)
+            Theta        = np.einsum("zSaj,zSjk->zSak", self.walker_tensors, inv_overlap) # shape = (Nwalkers,spin,NAO,NMO)
+            # Compute one-particle density matrix: G1p = <a_j^\dag a_k> = THETA TRIAL
+            G1p          = np.einsum("zSaj,Sbj->zSab", Theta, self.trial.wf.conj()) # shape = (Nwalkers,spin,NAO,NAO)
+            # Compute action of the precomputed ltensor (spin,Ntensors,NMO,NAO) on the current Theta(Nwalkers,spin,NAO,NMO)
+            lTheta       = np.einsum('Snja,zSak->zSnjk', self.precomputed_ltensor, Theta) # shape = (Nwalkers,spin,Ntensors,NMO,NMO)
+            trace_lTheta = np.einsum('zSnjj->zn', lTheta) # shape = (Nwalkers,Ntensors)
+            L_n          = 2 * trace_lTheta - self.mf_shift
 
             # compute local energy for each walker
-            local_energy = self.local_energy(h1e, eri, gf)
+            local_energy = self.local_energy_YuZhang(h1e, eri, G1p)
+            #local_energy = self.local_energy(h1e, eri, G1p, L_n, lTheta, ltensor)
             energy = np.sum([self.walker_coeff[i]*local_energy[i] for i in range(len(local_energy))])
             energy = energy / np.sum(self.walker_coeff)
 
-            #print( energy )
-
             # imaginary time propagation
-            xbar = -np.sqrt(self.dt) * (1j * 2 * trace_ltheta - self.mf_shift)
+            xbar = -np.sqrt(self.dt) * (1j * 2 * trace_lTheta - self.mf_shift) # shape = (Nwalkers,Ntensors)
             cfb, cmf = self.propagation(shifted_h1e, xbar, ltensor)
             self.update_weight(overlap, cfb, cmf, local_energy)
 
