@@ -222,7 +222,7 @@ class QMCbase(object):
         energy = e1 + e2 + self.nuc_energy
         return energy
 
-    def local_energy(self, h1e, eri, G1p, L_n, lTheta, ltensor):
+    def local_energy(self, h1e, eri, G1p, trace_lTheta, lTheta, ltensor):
         # BMW:
         # Is this the same factors with and without spin ?
         # Eq. 72-74, J. Chem. Phys. 154, 024107 (2021)
@@ -231,7 +231,7 @@ class QMCbase(object):
         e1   = 2 * np.einsum("zSjk,jk->z", G1p, h1e)
 
         # Two-body Terms
-        Hartree   = np.einsum("zn->z", L_n**2 )
+        Hartree   = np.einsum("zn->z", trace_lTheta**2 )
         tmp       = np.einsum("zSnjk,zSnkl->zSnjl", lTheta, lTheta ) # Eq. 74, J. Chem. Phys. 154, 024107 (2021)
         Exchange  = np.einsum("zSnjj->z", tmp)
         e2        = 0.5 * (Hartree - Exchange)
@@ -244,10 +244,10 @@ class QMCbase(object):
         r"""
         Update the walker coefficients
         """
-        newoverlap = self.walker_trial_overlap()
+        newoverlap = self.walker_trial_overlap() # shape = (walker,spin,NMO,NMO)
         # be cautious! power of 2 was neglected before.
         overlap_ratio = (np.linalg.det(newoverlap) / np.linalg.det(overlap))**2
-        overlap_ratio = np.sum( overlap_ratio, axis=1 ) # BMW: Sum over spin here
+        overlap_ratio = np.sum( overlap_ratio, axis=1 ) # BMW: Sum over spin here -- Is this right ?
 
         # the hybrid energy scheme
         if self.energy_scheme == "hybrid":
@@ -359,11 +359,10 @@ class QMCbase(object):
             # Compute action of the precomputed ltensor (spin,Ntensors,NMO,NAO) on the current Theta(Nwalkers,spin,NAO,NMO)
             lTheta       = np.einsum('Snja,zSak->zSnjk', self.precomputed_ltensor, Theta) # shape = (Nwalkers,spin,Ntensors,NMO,NMO)
             trace_lTheta = np.einsum('zSnjj->zn', lTheta) # shape = (Nwalkers,Ntensors)
-            L_n          = 2 * trace_lTheta - self.mf_shift
 
             # compute local energy for each walker
             local_energy = self.local_energy_YuZhang(h1e, eri, G1p)
-            #local_energy = self.local_energy(h1e, eri, G1p, L_n, lTheta, ltensor)
+            #local_energy = self.local_energy(h1e, eri, G1p, trace_lTheta, lTheta, ltensor)
             energy = np.sum([self.walker_coeff[i]*local_energy[i] for i in range(len(local_energy))])
             energy = energy / np.sum(self.walker_coeff)
 
