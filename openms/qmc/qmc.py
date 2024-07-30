@@ -69,7 +69,7 @@ class QMCbase(object):
         num_walkers = 100,
         renorm_freq = 5,
         random_seed = 1,
-        taylor_order = 6,
+        taylor_order = 20,
         energy_scheme = None,
         batched = False,
         *args, **kwargs):
@@ -247,7 +247,8 @@ class QMCbase(object):
         newoverlap = self.walker_trial_overlap() # shape = (walker,spin,NMO,NMO)
         # be cautious! power of 2 was neglected before.
         overlap_ratio = (np.linalg.det(newoverlap) / np.linalg.det(overlap))**2
-        overlap_ratio = np.sum( overlap_ratio, axis=1 ) # BMW: Sum over spin here -- Is this right ?
+        #overlap_ratio = np.sum( overlap_ratio, axis=1 ) # BMW: Sum over spin here -- Is this right ?
+        overlap_ratio = np.prod( overlap_ratio, axis=1 ) # BMW: Sum over spin here -- Is this right ?
 
         # the hybrid energy scheme
         if self.energy_scheme == "hybrid":

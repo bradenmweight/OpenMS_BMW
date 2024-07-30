@@ -79,10 +79,17 @@ class AFQMC(qmc.QMCbase):
         xi = xi.reshape(self.num_walkers, self.nfields)
         two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,npq->zpq', xi-xbar, ltensor)
 
+
+
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
             temp = np.einsum('zpq, zSqr->zSpr', two_body_op_power, temp) / (order_i + 1.0)
             self.walker_tensors += temp
+        # BMW:
+        # expm is slower...resort to simple Taylor expansion (~10 terms seems to be enough)
+        # For very large systems, this will be a bottleneck
+        # self.walker_tensors = np.einsum('zpq,zSqr->zSpr', scipy.linalg.expm(two_body_op_power), self.walker_tensors)
+
 
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
