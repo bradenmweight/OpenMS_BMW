@@ -70,36 +70,37 @@ class AFQMC(qmc.QMCbase):
         """
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
+        # (a,b) are AOs, (j,k) are MOs, S is spin, z is the walker index
         one_body_op_power   = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('pq,zSqr->zSpr', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('ab,zSbk->zSak', one_body_op_power, self.walker_tensors)
 
         # 2-body propagator propagation
         # exp[(x-\bar{x}) * L]
         xi = np.random.normal(0.0, 1.0, self.nfields * self.num_walkers)
         xi = xi.reshape(self.num_walkers, self.nfields)
-        two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,npq->zpq', xi-xbar, ltensor)
+        two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,nab->zab', xi-xbar, ltensor)
 
 
 
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
-            temp = np.einsum('zpq, zSqr->zSpr', two_body_op_power, temp) / (order_i + 1.0)
+            temp = np.einsum('zab,zSbj->zSaj', two_body_op_power, temp) / (order_i + 1.0)
             self.walker_tensors += temp
         # BMW:
         # expm is slower...resort to simple Taylor expansion (~10 terms seems to be enough)
-        # For very large systems, this will be a bottleneck
-        # self.walker_tensors = np.einsum('zpq,zSqr->zSpr', scipy.linalg.expm(two_body_op_power), self.walker_tensors)
+        # For very large systems (NAO >> 1), this will be a bottleneck
+        # self.walker_tensors = np.einsum('zab,zSbj->zSaj', scipy.linalg.expm(two_body_op_power), self.walker_tensors)
 
 
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
         one_body_op_power = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('pq, zSqr->zSpr', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('ab,zSbj->zSaj', one_body_op_power, self.walker_tensors)
         # self.walker_tensosr = np.exp(-self.dt * nuc) * self.walker_tensors
 
         # (x*\bar{x} - \bar{x}^2/2)
-        cfb = np.einsum("zn, zn->z", xi, xbar)-0.5*np.einsum("zn, zn->z", xbar, xbar)
-        cmf = -np.sqrt(self.dt)*np.einsum('zn, n->z', xi-xbar, self.mf_shift)
+        cfb = np.einsum("zn,zn->z", xi, xbar) - 0.5 * np.einsum("zn,zn->z", xbar, xbar)
+        cmf = -np.sqrt(self.dt) * np.einsum('zn,n->z', xi-xbar, self.mf_shift)
         return cfb, cmf
 
 

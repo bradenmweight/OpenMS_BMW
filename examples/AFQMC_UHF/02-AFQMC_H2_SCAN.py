@@ -56,7 +56,7 @@ if __name__ == "__main__":
         atoms = [("H", -b/2, 0, 0), ("H", b/2, 0, 0)]
         mol = gto.M(atom=atoms, basis=basis, unit='Bohr', verbose=3)
         # AFQMC
-        num_walkers     = 2000 # 5000
+        num_walkers     = 5000
         dt              = 0.1 # 0.1
         total_time      = 10.0
         afqmc_obj       = afqmc.AFQMC(mol, numdets=1, trial="RHF", dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")

@@ -43,11 +43,9 @@ class TrialWFBase(object):
         if mf is None:
             print( "trial", trial )
             if ( trial == "RHF" ):
-                print("Doing restricted RHF calculation.")
                 mf = scf.RHF(self.mol)
                 mf.kernel()
             elif ( trial == "UHF" ):
-                print("Doing unrestricted UHF calculation.")
                 # UHF -- BMW: Need to break symmetry of initial guess to get right solution
                 mf = scf.UHF(mol)
                 dm_alpha, dm_beta = mf.get_init_guess()

@@ -69,7 +69,7 @@ class QMCbase(object):
         num_walkers = 100,
         renorm_freq = 5,
         random_seed = 1,
-        taylor_order = 20,
+        taylor_order = 10,
         energy_scheme = None,
         batched = False,
         *args, **kwargs):
@@ -135,7 +135,6 @@ class QMCbase(object):
         # set up trial wavefunction
         logger.info(self, "\n========  Initialize Trial WF and Walker  ======== \n")
         if ( self.trial == "RHF" ):
-            print( "A", self.trial )
             self.trial = TrialHF(self.mol, trial=self.trial)
             self.spin_fac = 1.0
         elif ( self.trial == "UHF" ):
@@ -212,11 +211,21 @@ class QMCbase(object):
             ortho_walkers[idx] = np.linalg.qr(self.walker_tensors[idx])[0]
         self.walker_tensors = ortho_walkers
 
-    def local_energy_YuZhang(self, h1e, eri, G1p):
+    def local_energy_YuZhang_ORIG(self, h1e, eri, G1p):
         tmp  = 2 * np.einsum("prqs,zSpr->zSqs", eri, G1p)
         tmp -=     np.einsum("prqs,zSps->zSqr", eri, G1p)
         
         e1   = 2 * np.einsum("zSpq,pq->z",   G1p, h1e)
+        e2   =     np.einsum("zSqs,zSqs->z", tmp, G1p)
+
+        energy = e1 + e2 + self.nuc_energy
+        return energy
+
+    def local_energy_YuZhang(self, h1e, eri, G1p):
+        tmp  = 2 * np.einsum("prqs,zSpr->zSqs", eri, G1p) * self.spin_fac
+        tmp -=     np.einsum("prqs,zSps->zSqr", eri, G1p) #* self.spin_fac
+        
+        e1   = 2 * np.einsum("zSpq,pq->z",   G1p, h1e) * self.spin_fac
         e2   =     np.einsum("zSqs,zSqs->z", tmp, G1p)
 
         energy = e1 + e2 + self.nuc_energy
@@ -244,11 +253,21 @@ class QMCbase(object):
         r"""
         Update the walker coefficients
         """
+        # BMW:
+        # How to handle the spin here ?
+        # To me, the spin should be gone before computing the phase angles.
+        # Overlaps between spins should be multiplied: Eq. 8, J. Chem. Theory Comput. 2016, 12, 1207−1219
         newoverlap = self.walker_trial_overlap() # shape = (walker,spin,NMO,NMO)
+        new_det    = np.linalg.det(newoverlap) # shape = (walker,spin)
+        old_det    = np.linalg.det(overlap) # shape = (walker,spin)
+        new_det    = np.prod(new_det, axis=1) # |Sup| * |Sdown|
+        old_det    = np.prod(old_det, axis=1) # |Sup| * |Sdown|
+        overlap_ratio = ( new_det / old_det )**2 # BMW -- Where does the square come from ? I don't see it in Eq. 54 or 57 in J. Chem. Phys. 154, 024107 (2021)
+
+        ### Old Yu Zhang Version
         # be cautious! power of 2 was neglected before.
-        overlap_ratio = (np.linalg.det(newoverlap) / np.linalg.det(overlap))**2
-        #overlap_ratio = np.sum( overlap_ratio, axis=1 ) # BMW: Sum over spin here -- Is this right ?
-        overlap_ratio = np.prod( overlap_ratio, axis=1 ) # BMW: Sum over spin here -- Is this right ?
+        # newoverlap = self.walker_trial_overlap()
+        # overlap_ratio = (np.linalg.det(newoverlap) / np.linalg.det(overlap))**2
 
         # the hybrid energy scheme
         if self.energy_scheme == "hybrid":
@@ -364,6 +383,7 @@ class QMCbase(object):
             # compute local energy for each walker
             local_energy = self.local_energy_YuZhang(h1e, eri, G1p)
             #local_energy = self.local_energy(h1e, eri, G1p, trace_lTheta, lTheta, ltensor)
+            #energy = np.einsum("a,a->", self.walker_coeff, local_energy ) / self.num_walkers
             energy = np.sum([self.walker_coeff[i]*local_energy[i] for i in range(len(local_energy))])
             energy = energy / np.sum(self.walker_coeff)
 
