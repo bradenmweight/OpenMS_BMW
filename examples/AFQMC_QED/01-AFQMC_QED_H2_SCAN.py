@@ -14,13 +14,15 @@ if __name__ == "__main__":
     DATA_DIR = "01-AFQMC_QED_H2_SCAN"
     sp.call(f"mkdir -p {DATA_DIR}", shell=True)
 
-    basis = "sto3g"
-    bmin = 1.0
+    basis        = "ccpVTZ"
+    photon_basis = 'fock'
+    NFock        = 5
+    bmin = 0.75
     bmax = 10.0
     #bond_list_coarse = np.arange( bmin,bmax+0.2,0.2 ) # Bohr
-    bond_list_coarse = np.arange( bmin,bmax+0.5,0.5 ) # Bohr
+    bond_list_coarse = np.arange( bmin,bmax+0.25,0.25 ) # Bohr
     #bond_list_coarse = [10.] # np.arange( bmin,bmax+0.2,0.2 ) # Bohr
-    bond_list_fine   = np.arange( bmin,bmax+0.2,0.2 ) # Bohr
+    bond_list_fine   = np.arange( bmin,bmax+0.01,0.01 ) # Bohr
     #bond_list_fine   = np.arange( bmin,bmax+0.05,0.05 ) # Bohr
 
     time_list   = []
@@ -54,7 +56,7 @@ if __name__ == "__main__":
 
         # Cavity parameters
         cavity_freq     = np.array([20/27.2114])
-        cavity_coupling = 0.1 # np.sqrt(2*cavity_freq) * 0.1 # Convert from A0 to lambda coupling
+        cavity_coupling = np.array([0.1]) # np.sqrt(2*cavity_freq) * 0.1 # Convert from A0 to lambda coupling
         cavity_vec      = np.array([np.array([1,0,0])])
         cavity_mode     = np.einsum("m,md->md", cavity_coupling, cavity_vec ) / np.linalg.norm(cavity_vec)
 
@@ -70,12 +72,12 @@ if __name__ == "__main__":
         total_time      = 10.0
         
         # AFQMC
-        afqmc_obj       = afqmc.AFQMC(mol, numdets=1, trial="RHF", dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
+        afqmc_obj       = afqmc.AFQMC(mol, numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC.append( np.array(np.real(energies)) )
         
         # QED-AFQMC
-        afqmc_obj       = afqmc.QEDAFQMC(mol, cavity_freq=cavity_freq, cavity_coupling=cavity_coupling, cavity_vec=cavity_vec, numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
+        afqmc_obj       = afqmc.QEDAFQMC(mol, NFock=NFock, photon_basis=photon_basis, cavity_freq=cavity_freq, cavity_coupling=cavity_coupling, cavity_vec=cavity_vec, numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC_QED.append( np.array(np.real(energies)) )
         
@@ -113,6 +115,6 @@ if __name__ == "__main__":
     plt.legend()
     plt.xlim(bmin,bmax)
     plt.tight_layout()
-    plt.savefig("%s/02-AFQMC_H2_SCAN_T_%1.0f_dt_%1.4f_Nw_%1.0f_basis_%s.jpg" % (DATA_DIR,total_time,dt,num_walkers,basis), dpi=300)
+    plt.savefig("%s/01-AFQMC_H2_SCAN_T_%1.0f_dt_%1.4f_Nw_%1.0f_basis_%s.jpg" % (DATA_DIR,total_time,dt,num_walkers,basis), dpi=300)
     plt.clf()
 

@@ -31,6 +31,7 @@ class TrialWFBase(object):
 
     def __init__(self,
                  mol,
+                 cavity,
                  #ne: Tuple[int, int],
                  #n_mo : int,
                  mf = None,
@@ -55,7 +56,7 @@ class TrialWFBase(object):
         self.numdets_props = numdets_props
         self.numdets_chunks = numdets_chunks
 
-        self.build()
+        self.build( cavity )
 
     def build(self):
         r"""
@@ -69,7 +70,7 @@ class TrialHF(TrialWFBase):
         super().__init__(*args, **kwargs)
 
 
-    def build(self):
+    def build(self, cavity):
 
         overlap = self.mol.intor('int1e_ovlp')
         ao_coeff = lo.orth.lowdin(overlap)
@@ -77,6 +78,31 @@ class TrialHF(TrialWFBase):
 
         self.wf = self.mf.mo_coeff
         self.wf = xinv.dot(self.mf.mo_coeff[:, :self.mol.nelec[0]])
+
+        # Define tensor product basis for electron-boson DOFs
+        if ( cavity is not None ):
+            print( "wc = ", cavity['cavity_freq'] )
+            if ( cavity['photon_basis'] == 'fock' ):
+                print( "photon_basis = ", cavity['photon_basis'] )
+                if ( cavity['NFock'] is not None ): # Introduce Fock state basis for quantized cavity field
+                    fock_basis    = np.zeros( (cavity['NFock']) )
+                    fock_basis[0] = 1.0 # Start from vacuum state as initial guess: |PSI> = |HF> \otimes |n=0>
+                    # BMW: 
+                    # How to do a tensor product basis with HF if it is a matrix ? It only makes sense with determinents...
+                    #self.wf = np.kron( self.wf, fock_basis )
+                    self.wf = np.array([ self.wf * fock_basis[i] for i in range(cavity['NFock']) ])
+                    print( "Constructing the tensor-product electron-photon basis" )
+                    print( "Polariton WFN Shape =", self.wf.shape )
+                    print( "Trial Polariton WFN: |POL> = |HF> \otimes |n = 0>\n", self.wf )
+                else:
+                    raise ValueError("Number of Fock states NFock >= 2 must be specified.")
+            else:
+                raise NotImplementedError("Only the Fock basis is implemented for photon DOFs. Choose photon_basis='fock'.")
+        else:
+            self.wf = self.wf[None,:,:] # Add single Fock basis state for computational ease -- No added scaling due to this
+
+
+
 
 # define walker class
 class WalkerBase(object):

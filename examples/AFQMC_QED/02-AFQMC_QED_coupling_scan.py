@@ -14,9 +14,11 @@ if __name__ == "__main__":
     DATA_DIR = "02-AFQMC_QED_coupling_scan"
     sp.call(f"mkdir -p {DATA_DIR}", shell=True)
 
-    basis = "sto3g"
+    basis        = "ccpVTZ"
+    photon_basis = 'fock'
+    NFock        = 5
     bond_length = 2.8 # Bohr
-    A0_list = np.arange( 0.0, 0.55, 0.05 ) # np.arange( 0.0, 0.225, 0.025 )
+    A0_list = np.arange( 0.0, 0.51, 0.01 ) # np.arange( 0.0, 0.225, 0.025 )
 
 
     time_list   = []
@@ -53,7 +55,7 @@ if __name__ == "__main__":
         total_time      = 10.0
 
         # QED-AFQMC
-        afqmc_obj       = afqmc.QEDAFQMC(mol, cavity_freq=cavity_freq, cavity_coupling=cavity_coupling, cavity_vec=cavity_vec, numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
+        afqmc_obj       = afqmc.QEDAFQMC(mol, NFock=NFock, photon_basis=photon_basis, cavity_freq=cavity_freq, cavity_coupling=cavity_coupling, cavity_vec=cavity_vec, numdets=1, dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
         E_AFQMC_QED.append( np.array(np.real(energies)) )
         
