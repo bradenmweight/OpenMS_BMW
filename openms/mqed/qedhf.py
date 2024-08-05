@@ -235,7 +235,7 @@ Keyword argument "init_dm" is replaced by "dm0"''')
         vhf = mf.get_veff(mol, dm, dm_last, vhf)
         #if isinstance(mf, mqed.qedhf.RHF):
         h1e = mf.get_hcore(mol, dm)
-        e_tot = mf.energy_tot(dm, h1e, vhf)
+        e_tot = mf.energy_tot(dm, h1e, vhf) + 0.5 * numpy.sum( mf.qed.omega )
 
         # Here Fock matrix is h1e + vhf, without DIIS.  Calling get_fock
         # instead of the statement "fock = h1e + vhf" because Fock matrix may
@@ -275,7 +275,7 @@ Keyword argument "init_dm" is replaced by "dm0"''')
         vhf = mf.get_veff(mol, dm, dm_last, vhf)
         #if isinstance(mf, mqed.qedhf.RHF):
         h1e = mf.get_hcore(mol, dm)
-        e_tot, last_hf_e = mf.energy_tot(dm, h1e, vhf), e_tot
+        e_tot, last_hf_e = mf.energy_tot(dm, h1e, vhf) + 0.5 * numpy.sum( mf.qed.omega ), e_tot
 
         fock = mf.get_fock(h1e, s1e, vhf, dm)
         norm_gorb = numpy.linalg.norm(mf.get_grad(mo_coeff, mo_occ, fock))
