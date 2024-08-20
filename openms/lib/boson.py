@@ -341,7 +341,7 @@ class Photon(Boson):
         # CS z_\alpha = <\lambda\cdot D>
         self.z_lambda = lib.einsum("pq, Xpq ->X", dm, self.gmat)
 
-    def add_oei_ao(self, dm, s1e=None, residue=False):
+    def add_oei_ao(self, dm=None, s1e=None, residue=False):
         r"""
         return DSE-mediated oei.. This is universal for bare HF or QED-HF.
         DSE-mediated oei:
@@ -362,15 +362,15 @@ class Photon(Boson):
         if s1e is None:
             s1e = self._mf.get_ovlp(self._mol)
 
-        if self.use_cs:
+        if self.use_cs and dm is not None:
             self.update_cs(dm)
         gvar2 = numpy.ones(self.nmodes)
         if residue:
             gvar2 = self.couplings_res**2 # element-wise
 
-        oei = - lib.einsum("Xpq, X->pq", self.gmat, gvar2 * self.z_lambda)
-        oei -= lib.einsum("Xpq, X->pq", self.q_dot_lambda, gvar2)
-        z2s = 0.5 * numpy.sum(self.z_lambda**2 * gvar2) * s1e/self._mol.nelectron
+        oei  = -lib.einsum("Xpq, X->pq", self.gmat, gvar2 * self.z_lambda)
+        oei -=  lib.einsum("Xpq, X->pq", self.q_dot_lambda, gvar2)
+        z2s  =  0.5 * numpy.sum(self.z_lambda**2 * gvar2) * s1e/self._mol.nelectron
         oei += z2s
 
         return oei

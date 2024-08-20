@@ -20,6 +20,7 @@ import numpy as np
 import scipy
 import itertools
 import logging
+import random
 
 from openms.qmc.trial import TrialHF
 from openms import runtime_refs, _citations
@@ -70,12 +71,13 @@ class QMCbase(object):
         nsteps = 25,
         total_time = 5.0,
         num_walkers = 100,
-        renorm_freq = 5,
-        random_seed = 1,
+        renorm_freq = 10,
+        random_seed = random.randint(1,1_000_000), #1,
         taylor_order = 6,
         energy_scheme = None,
         batched = False,
         cavity = None,
+        compute_wavefunction = False,
         **kwargs):
         r"""
 
@@ -121,9 +123,10 @@ class QMCbase(object):
         self.random_seed = random_seed
         self.walker_coeff = None
         self.walker_tensors = None
+        self.compute_wavefunction = compute_wavefunction
 
         self.mf_shift = None
-        self.print_freq = 10
+        self.print_freq = 1
 
         self.hybrid_energy = None
 
@@ -194,24 +197,56 @@ class QMCbase(object):
         return observables
 
     def walker_trial_overlap(self):
-        return np.einsum('Faj, zFak->zFjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Fock,MO,MO)
+        return np.einsum('Faj,zFak->zjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,MO,MO)
+
+    def renormalization_YuZhang(self):
+        r"""
+        Renormalizaiton and orthogonaization of walkers
+        """
+        ortho_walkers = np.zeros_like(self.walker_tensors)
+        for idx in range(self.walker_tensors.shape[0]):
+            ortho_walkers[idx] = np.linalg.qr(self.walker_tensors[idx])[0]
+        self.walker_tensors = ortho_walkers
+
 
     def renormalization(self):
         r"""
         Renormalizaiton and orthogonaization of walkers
         """
 
+        # Orthogonalize the walkers
+        shape         = self.walker_tensors[0].shape
         ortho_walkers = np.zeros_like(self.walker_tensors)
-        for idx in range(self.walker_tensors.shape[0]):
-            ortho_walkers[idx] = np.linalg.qr(self.walker_tensors[idx])[0]
+        for zi in range( self.num_walkers ):
+            tmp = self.walker_tensors[zi].reshape( -1, shape[-1] ) # (Fock,AO,MO) --> (Fock*AO,MO)
+            ortho_walkers[zi] = np.linalg.qr( tmp )[0].reshape( shape ) # (Fock*AO,MO) --> (Fock,AO,MO)
         self.walker_tensors = ortho_walkers
 
+        # Normalize the Walkers (Simple Way)
+        # overlap = np.einsum('zFaj, zFak->zjk', self.walker_tensors.conj(), self.walker_tensors) # (Walker,MO,MO)
+        # overlap = np.linalg.det( overlap ) # (Walker)
+        # for z in range( self.num_walkers ):
+        #     self.walker_tensors[z] = self.walker_tensors[z] / np.sqrt( overlap[z] )
+
+        # BMW:
+        # I noticed that the coefficients become huge numbers during propagation.
+        # e.g., 155232006980.58905
+        # Here, we renormalize the coefficients to avoid numerical instability.
+        # This does not seem to affect the results, but there could be numerical 
+        #   instability without this correction
+        #print( "Norm of Walker Coeffs:", np.sum( self.walker_coeff ) )
+        #self.walker_coeff = self.walker_coeff / np.sum( np.abs(self.walker_coeff) )
+
+
     def local_energy(self, h1e, eri, G1p):
-        tmp  = 2 * np.einsum("prqs,zFpr->zqs", eri, G1p)
-        tmp -=     np.einsum("prqs,zFps->zqr", eri, G1p)
+        """
+        F is a placeholder. If this function runs, the F dimension is of shape=(1)
+        """
+        tmp  = 2 * np.einsum("prqs,zFFpr->zqs", eri, G1p)
+        tmp -=     np.einsum("prqs,zFFps->zqr", eri, G1p)
         
-        e1   = 2 * np.einsum("zFpq,pq->z",   G1p, h1e)
-        e2   =     np.einsum("zqs,zFqs->z", tmp, G1p)
+        e1   = 2 * np.einsum("zFFpq,pq->z",   G1p, h1e)
+        e2   =     np.einsum("zqs,zFFqs->z", tmp, G1p)
 
         energy = e1 + e2 + self.energy_nuc
         return energy
@@ -223,7 +258,7 @@ class QMCbase(object):
         """
         newoverlap = self.walker_trial_overlap()
         newoverlap = np.linalg.det( newoverlap ) # Det in electronic sub-space
-        newoverlap = np.sum( newoverlap , axis=-1 ) # Sum over photon sub-space
+        if ( len(oldoverlap.shape) >= 2 ): oldoverlap = np.linalg.det( oldoverlap )
 
         # be cautious! power of 2 was neglected before.
         overlap_ratio = (newoverlap / oldoverlap)**2
@@ -252,6 +287,12 @@ class QMCbase(object):
 
         self.walker_coeff *= importance_func
 
+    def get_wfn(self):
+        """
+        Get the wavefunction
+        """
+        pass
+
     def kernel(self, trial_wf=None):
         r"""
         trial_wf: trial wavefunction
@@ -263,71 +304,70 @@ class QMCbase(object):
         logger.info(self, "\n======== get integrals ========")
         h1e, eri, ltensor = self.get_integrals()
         shifted_h1e   = np.zeros(h1e.shape)
-        rho_mf        = np.einsum( "Faj,Fbj->Fab", self.trial.wf, self.trial.wf ) # rho_mf in AO Basis
-        self.mf_shift = 1j * np.einsum("nab,Fab->n", ltensor, rho_mf) # Should we sum over spin S
+        rho_mf        = np.einsum( "Faj,Fbj->ab", self.trial.wf, self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
+        self.mf_shift = 1j * np.einsum("nab,ab->n", ltensor, rho_mf) # Compute <L_n>
 
         for p, q in itertools.product(range(h1e.shape[0]), repeat=2):
             shifted_h1e[p, q] = h1e[p, q] - 0.5 * np.trace(eri[p, :, :, q])
-        shifted_h1e = shifted_h1e - np.einsum("n,nab->ab", self.mf_shift, 1j*ltensor)
 
-        #self.precomputed_ltensor = np.einsum("pr,npq->nrq", self.trial.wf.conj(), ltensor) # Original by Yu Zhang, shape = (spin,Ntensors,NMO,NAO)
-        self.precomputed_ltensor = np.einsum("Faj,nab->Fnjb", self.trial.wf.conj(), ltensor) # Same as original
+        #shifted_h1e = shifted_h1e - np.einsum("n,nab->ab", self.mf_shift, 1j*ltensor)
+        shifted_h1e     = shifted_h1e + np.einsum("n,nab->ab", self.mf_shift, ltensor)
+
+        self.precomputed_ltensor = np.einsum("Faj,nab->Fnjb", self.trial.wf.conj(), ltensor) # shape = (Fock,Ntensors,NMO,NAO)
 
         time = 0.0
         energy_list = []
         time_list = []
+        wavefunction_list = []
         while time <= self.total_time:
+            #print( time )
             dump_result = (int(time/self.dt) % self.print_freq  == 0)
 
             # pre-processing: prepare walker tensor
-            overlap     = self.walker_trial_overlap() # (Walker,Fock,MO,MO)
-            overlap     = np.linalg.det( overlap ) # Det in electronic sub-space
-            overlap     = np.sum( overlap , axis=-1 ) # Sum over photon sub-space
-            #inv_overlap = np.linalg.inv(overlap) # (Walker,Fock,MO,MO)
-            inv_overlap = 1/overlap # (Walker,Fock,MO,MO)
-            #Theta       = np.einsum("zFaj,zFjk->zFak", self.walker_tensors, inv_overlap)  # (Walker,Fock,AO,MO)
-            Theta       = np.einsum("zFaj,z->zFaj", self.walker_tensors, inv_overlap)  # (Walker,Fock,AO,MO)
+            overlap     = self.walker_trial_overlap() # (Walker,MO,MO) # Photon already summed over
+            ### VERSION 1 BMW ###
+            # overlap     = np.linalg.det( overlap ) # Det in electronic sub-space
+            # Theta       = np.einsum("zFaj,z->zFaj", self.walker_tensors, 1/overlap)  # (Walker,Fock,AO,MO)
+            ### VERSION 2 YZ ###
+            inv_overlap = np.linalg.inv(overlap) # (Walker,MO,MO)
+            Theta       = np.einsum("zFaj,zjk->zFak", self.walker_tensors, inv_overlap)  # (Walker,Fock,AO,MO)
 
-            G1p          = np.einsum("zFaj,Fbj->zFab", Theta, self.trial.wf.conj())       # shape = (Nwalkers,Fock,NAO,NAO)
+            G1p          = np.einsum("zFaj,Gbj->zFGab", Theta, self.trial.wf.conj())       # shape = (Nwalkers,Fock,NAO,NAO)
             lTheta       = np.einsum('Fnja,zFak->zFnjk', self.precomputed_ltensor, Theta)  # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)
             trace_lTheta = np.einsum('zFnjj->zn', lTheta)                                 # shape = (Nwalkers,Ntensors)
 
             # compute local energy for each walker
             local_energy = self.local_energy(h1e, eri, G1p)
-            energy = np.sum([self.walker_coeff[i]*local_energy[i] for i in range(len(local_energy))])
-            energy = energy / np.sum(self.walker_coeff)
+            energy       = np.sum([self.walker_coeff[i]*local_energy[i] for i in range(len(local_energy))])
+            energy       = energy / np.sum(self.walker_coeff)
 
             # imaginary time propagation
-            xbar = -np.sqrt(self.dt) * (1j * 2 * trace_lTheta - self.mf_shift) # shape = (Nwalkers,Ntensors)
-            cfb, cmf = self.propagation(shifted_h1e, xbar, ltensor)
-            self.update_weight(overlap, cfb, cmf, local_energy)
+            F        = -np.sqrt(self.dt) * (1j * 2 * trace_lTheta - self.mf_shift) # shape = (Nwalkers,Ntensors)
+            N_I, cmf = self.propagation(shifted_h1e, F, ltensor)
+            self.update_weight(overlap, N_I, cmf, local_energy)
 
-            # re-orthogonalization
-            if int(time / self.dt) == self.renorm_freq:
-                self.renormalization()
+
+            if ( int(time / self.dt) % self.renorm_freq == 0 ):
+               #print("Renormalizing at time %1.3f" % time)
+               self.renormalization()
+            #print( time, np.min(S), np.average(S), np.max(S) )
 
             # print energy and time
             if dump_result:
                 time_list.append(time)
                 energy_list.append(energy)
+                if ( self.compute_wavefunction ):
+                    wavefunction_list.append( self.get_wfn() )
                 logger.info(self, f" Time: {time:9.3f}    Energy: {energy:15.8f}")
 
             time += self.dt
         
         #self.post_kernel()
 
-        return time_list, energy_list
+        
+            
+        if ( self.compute_wavefunction ):
+            return time_list, energy_list, wavefunction_list
+        else:
+            return time_list, energy_list
 
-
-
-    # def post_kernel(self):
-    #     r"""
-    #     Use the post kernel to print citation informations
-    #     """
-    #     breakline = '='*80
-    #     print(f"\n{breakline}")
-    #     print(f"*  Cheers, the job is done!\n")
-    #     print(f"Citations:")
-    #     for i, citation in enumerate(runtime_refs):
-    #         print(f"[{i+1}]. {citation}")
-    #     print(f"{breakline}\n")

@@ -37,7 +37,7 @@ import h5py
 
 
 from openms.mqed.qedhf import RHF as QEDRHF
-from openms.lib.boson import Photon
+from openms.lib.boson import Photon, get_dipole_ao, get_quadrupole_ao
 
 from openms.qmc import qmc
 #from openms.mqed.qedhf import RHF as QEDRHF
@@ -94,12 +94,21 @@ class AFQMC(qmc.QMCbase):
         # e^{-dt/2*H1e}
         one_body_op_power = scipy.linalg.expm(-self.dt/2 * h1e)
         self.walker_tensors = np.einsum('ab,zFbj->zFaj', one_body_op_power, self.walker_tensors)
-        # self.walker_tensosr = np.exp(-self.dt * nuc) * self.walker_tensors
 
         # (x*\bar{x} - \bar{x}^2/2)
         cfb = np.einsum("zn,zn->z", xi, xbar) - 0.5 * np.einsum("zn,zn->z", xbar, xbar)
         cmf = -np.sqrt(self.dt) * np.einsum('zn,n->z', xi-xbar, self.mf_shift)
         return cfb, cmf
+
+    def get_wfn(self):
+        """
+        Get the wavefunction
+        """
+        coeffs = self.walker_coeff
+        wfns   = self.walker_tensors
+        wfn    = np.einsum('z,zFak->Fak', coeffs, wfns)
+        norm   = np.linalg.det( np.einsum('Faj,Fak->jk', wfn.conj(), wfn ) )
+        return wfn / np.sqrt( norm )
 
 
 class QEDAFQMC(AFQMC):
@@ -127,147 +136,83 @@ class QEDAFQMC(AFQMC):
             self.cavity_coupling = cavity_coupling
             self.cavity_vec      = cavity_vec / np.linalg.norm( cavity_vec )
             self.cavity_mode     = cavity_coupling * cavity_vec # To match with definition in qedhf.py -- I think coupling and vector should be separated.
+            self.NMODE           = len(cavity_freq)
             self.qedmf           = QEDRHF(self.mol, cavity_mode=self.cavity_mode, cavity_freq=self.cavity_freq)
             self.qedmf.kernel()
             self.photon          = Photon(self.mol,self.qedmf,omega=self.cavity_freq,vec=self.cavity_vec,gfac=self.cavity_coupling)
-            self.dipole_ao       = mol.intor_symmetric("int1e_r", comp=3) #- np.einsum("i,ix->x", mol.atom_charges(), mol.atom_coords())[:,None,None] / mol.tot_electrons() # self.photon.get_dipole_ao()
-            self.dipole_ao       = np.einsum("dab,d->ab", self.dipole_ao, self.cavity_vec[0]) # For now, just do first mode.
+            
+            self.dipole_ao_polarized = []
+            for mode in range( self.NMODE ):
+                self.dipole_ao_polarized.append( self.photon.get_polarized_dipole_ao(mode) )
+            self.dipole_ao_polarized     = np.array(self.dipole_ao_polarized)        
+            self.NAO                     = self.dipole_ao_polarized.shape[-1]
+            self.quadrupole_ao           = get_quadrupole_ao(mol, add_nuc_dipole=True).reshape( (3,3,self.NAO,self.NAO) )
+            self.quadrupole_ao_polarized = np.einsum("mx,xyab,my->mab", self.cavity_vec, self.quadrupole_ao, self.cavity_vec)
+            
+
+
+            # Define photon parameters
             self.photon_basis    = photon_basis
             self.NFock           = NFock
+            self.a               = np.diag( np.sqrt(np.arange(1,self.NFock)), k=1 ) # Define photon operator
+            self.aTa             = self.a.T + self.a
+            self.bilinear_factor = np.sqrt(self.cavity_freq/2) * self.cavity_coupling
+            self.DSE_factor      = self.cavity_coupling**2 / 2
+            self.MuQc            = np.einsum("m,FG,mab->FGab", self.bilinear_factor, self.aTa, self.dipole_ao_polarized)
             
-            # print("\n")
-            # print( "\tCavity Frequency = %1.4f a.u." % self.cavity_freq[0])
-            # print( "\tLight-Matter Coupling (\\lambda = 1/\sqrt(2 wc) A0) = %1.4f a.u." % self.cavity_coupling[0])
-            # print( "\tCavity Polarization Direction: %1.3f %1.3f %1.3f" % (self.cavity_vec[0,0], self.cavity_vec[0,1], self.cavity_vec[0,2]) )
-            # print("\n")
+            self.h1e_DSE         = np.einsum("m,mab->ab", self.DSE_factor, -1*self.quadrupole_ao_polarized )
+            self.exp_h1e_DSE     = scipy.linalg.expm( -self.dt/2 * self.h1e_DSE )
+            self.eri_DSE         = np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.dipole_ao_polarized, self.dipole_ao_polarized )
 
-            # create qed mf object
-            #self.qedmf = QEDRHF(mol, *args, **kwargs)
 
-    def local_energy(self, h1e, eri, G1p):
-        tmp  = 2 * np.einsum("prqs,zFpr->zqs", eri, G1p)
-        tmp -=     np.einsum("prqs,zFps->zqr", eri, G1p)
-        
-        e1   = 2 * np.einsum("zFpq,pq->z",   G1p, h1e)
-        e2   =     np.einsum("zqs,zFqs->z", tmp, G1p)
 
-        """
-        NOCC = G1p.shape[-1]
-        self.photon.get_gmat_so()        # Construct gmat in AO basis
-        gmat       = self.photon.gmatso  # Make local variable for it
-        gmat       = gmat[0,:NOCC,:NOCC] # Take only first mode for now
-        # Is this the projected dipole operator in AO basis
-        dipole_ao = np.array([ gmat for _ in range(self.NFock) ]) # Put dipole operator in product basis
-        """
-        dipole_ao        = self.dipole_ao
-        dipole_ao        = np.array([ dipole_ao for _ in range(self.NFock) ]) # Put dipole operator in product basis
-        cavity_freq      = self.cavity_freq
-        cavity_coupling  = self.cavity_coupling
-        bilinear_factor  = np.sqrt(cavity_freq/2) * cavity_coupling
-        DSE_factor       = cavity_coupling**2 / 2
-        a         = np.diag( np.sqrt(np.arange(self.NFock-1)), k=1 )
-        aTa       = a.T + a
-        bilinear  = bilinear_factor * np.einsum( "Fab,FG,zGba->z", dipole_ao, aTa, G1p )
-        DSE       = DSE_factor      * np.einsum( "Fab,Fbc,F,zFca->z", dipole_ao, dipole_ao, np.ones(self.NFock), G1p )
-
-        energy = e1 + e2 + self.energy_nuc + bilinear + DSE
-
-        return energy
 
     def get_integrals(self):
-        r"""
-        TODO: 1) add DSE-mediated eri and oei
-              2) bilinear coupling term (gmat)
-        """
-        overlap         = self.mol.intor('int1e_ovlp')
-        self.ao_coeff   = lo.orth.lowdin(overlap)
-        norb            = self.ao_coeff.shape[0]
+        ao_overlap      = self.mol.intor('int1e_ovlp')
+        self.ao_coeff   = lo.orth.lowdin(ao_overlap)
 
-        h1e_QED = self.qedmf.get_hcore( mol=self.mol, dm=self.trial.mf.dm )                       # BMW: This is he1_BARE + h1e_QED 
-                                                                                                  # BMW: What if we wanted the dm in the QED-HF basis ? qedmf.mf.dm --> trial.mf.dm
-        h1e_QED = self.ao_coeff @ h1e_QED @ self.ao_coeff.T # BMW: Rotate from AO to MO basis
+        # This is the fcidump way of doing things. Everything here is in AO basis
+        h1e, eri = self.make_read_fcidump( self.NAO )
+        h1e     += self.h1e_DSE
+        eri     += self.eri_DSE
 
-        # This is the fcidump way of doing things. Everything here is already in A) basis
-        self.photon.get_gmat_so() # Construct gmat in AO basis
-        gmat       = self.photon.gmatso # Make local variable for it
-        h1e, eri_QED = self.make_read_fcidump( norb )
-        NKEEP_MOs  = eri_QED.shape[0]
-        for mode in range( self.qedmf.qed.nmodes ):
-            eri_QED += np.einsum("pq,rs->pqrs", gmat[mode,:NKEEP_MOs,:NKEEP_MOs], gmat[mode,:NKEEP_MOs,:NKEEP_MOs])
-
-
-        # ltensor = self.make_ltensor( eri_QED, norb )
-        # return h1e_QED, eri_QED, ltensor
-
-        # FOR DEBUGGING #
-        h1e, eri = self.make_read_fcidump( norb )
-        ltensor  = self.make_ltensor( eri, norb )
+        ltensor = self.make_ltensor( eri, self.NAO )
         return h1e, eri, ltensor
+
+
+
+    def local_energy(self, h1e, eri, G1p):
+        tmp  = 2 * np.einsum("prqs,zFGpr->zFGqs", eri, G1p)
+        tmp -=     np.einsum("prqs,zFGps->zFGqr", eri, G1p)
+        
+        e1   = 2 * np.einsum("zFFpq,pq->z",   G1p, h1e)
+        e2   =     np.einsum("zGFqs,zGFqs->z", tmp, G1p)
+
+        #bilinear = 2 * np.einsum( "FGab,zFGab->z", self.MuQc, G1p )
+
+        ZPE = 0.5 * np.sum(self.cavity_freq) # Zero-point energy of the cavity mode
+        energy = e1 + e2 + self.energy_nuc + ZPE #+ bilinear
+
+        return energy
 
 
 
     def propagate_bilinear_coupling( self ):
         # BMW:
-        # Insert photon bilinear propagation here
-        NAO = self.walker_tensors.shape[-2]
-        NMO = self.walker_tensors.shape[-1]
-        """
-        self.photon.get_gmat_so()  # Construct gmat in MO basis -- Is this the projected dipole operator in MO basis ?
-        gmat = self.photon.gmatso  # Make local variable for it
-        gmat = self.ao_coeff @ gmat[0] @ self.ao_coeff.T # Rotate from MO to AO basis
-        gmat = gmat[0,:NAO,:NAO]   # What is the first axis here ??? Mode label ??? -- Yes, mode label
-        """
-        dipole_ao        = self.dipole_ao
-        cavity_freq      = self.cavity_freq
-        cavity_coupling  = self.cavity_coupling
-        factor           = np.sqrt(cavity_freq/2) * cavity_coupling
-        a         = np.diag( np.sqrt(np.arange(self.NFock-1)), k=1 ) # Define photon operator
-        aTa       = a.T + a
-        MuQc      = np.zeros( (self.NFock * NAO, self.NFock * NAO) )
-        for ao1 in range( NAO ):
-            for ao2 in range( NAO ):
-                for n1 in range( self.NFock ):
-                    for n2 in range( self.NFock ):
-                        index1 = n1 * NAO + ao1
-                        index2 = n2 * NAO + ao2
-                        MuQc[index1,index2] = dipole_ao[ao1,ao2] * aTa[n1,n2]
-        MuQc = factor * MuQc
-        exp_MuQc            = scipy.linalg.expm( -self.dt/2 * MuQc ).reshape( (self.NFock, NAO, self.NFock, NAO) ) # In full Hilbert space
-        self.walker_tensors = np.einsum('FaGb,zGbk->zFak', exp_MuQc, self.walker_tensors)
+        # Bilinear propagation
 
-
-    def propagate_dipole_self_energy( self ):
         # BMW:
-        # Insert photon bilinear propagation here
-        NAO = self.walker_tensors.shape[-2]
-        NMO = self.walker_tensors.shape[-1]
-        """
-        self.photon.get_gmat_so()  # Construct gmat in MO basis -- Is this the projected dipole operator in MO basis ?
-        gmat = self.photon.gmatso  # Make local variable for it
-        gmat = gmat[0,:NAO,:NAO]   # What is the first axis here ???
-        """
-        dipole_ao        = self.dipole_ao
-        cavity_freq      = self.cavity_freq
-        cavity_coupling  = self.cavity_coupling
-        factor           = cavity_coupling**2 / 2
-        """
-        DSE       = np.zeros( (self.NFock * NAO, self.NFock * NAO) )
-        for ao1 in range( NAO ):
-            for ao2 in range( NAO ):
-                for ao3 in range( NAO ):
-                    for n1 in range( self.NFock ):
-                        index1 = n1 * NAO + ao1
-                        index2 = n1 * NAO + ao2
-                        DSE[index1,index2] += dipole_ao[ao1,ao3] * dipole_ao[ao3,ao2] #* Iph[n1,n1]
-        exp_DSE             = scipy.linalg.expm( -self.dt/2 * DSE ).reshape( (self.NFock, NAO, self.NFock, NAO) ) # In full Hilbert space
-        """
-        DSE  = dipole_ao @ dipole_ao
-        DSE  = np.kron( DSE, np.identity(self.NFock) ) # In full Hilbert space
-        DSE *= factor
-        exp_DSE             = scipy.linalg.expm( -self.dt/2 * DSE ).reshape( (self.NFock, NAO, self.NFock, NAO) ) # In full Hilbert space
-        self.walker_tensors = np.einsum('FaGb,zGbk->zFak', exp_DSE, self.walker_tensors)
+        # I put Taylor expansion here to keep the four-index matrix notation for einsum. 
+        # We could reshape, then use expm(MuQc) if done properly
+        temp = self.walker_tensors.copy()
+        for order_i in range(self.taylor_order):
+            temp = np.einsum('FGab,zGbj->zFaj', -self.dt * self.MuQc, temp) / (order_i + 1.0)
+            self.walker_tensors += temp
 
-    def propagation(self, h1e, xbar, ltensor):
+
+
+
+    def propagation(self, h1e, F, ltensor):
         r"""
         Ref: https://www.cond-mat.de/events/correl13/manuscripts/zhang.pdf
         Eqs 50 - 51
@@ -279,11 +224,9 @@ class QEDAFQMC(AFQMC):
 
 
         # 2-body propagator propagation
-        # exp[(x-\bar{x}) * L]
-        xi = np.random.normal(0.0, 1.0, self.nfields * self.num_walkers)
-        xi = xi.reshape(self.num_walkers, self.nfields)
-        two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,nab->zab', xi-xbar, ltensor)
-
+        # exp[(x-F) * L], F = sqrt(-dt) <L_n>
+        xi = np.random.normal(0, 1.0, size=(self.num_walkers, self.nfields) )
+        two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,nab->zab', xi - F, ltensor)
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
             temp = np.einsum('zab,zFbj->zFaj', two_body_op_power, temp) / (order_i + 1.0)
@@ -291,7 +234,6 @@ class QEDAFQMC(AFQMC):
         
         #### PROPAGATE QED TERMS ####
         self.propagate_bilinear_coupling()
-        self.propagate_dipole_self_energy()
         #############################
 
         # 1-body propagator propagation
@@ -299,9 +241,11 @@ class QEDAFQMC(AFQMC):
         self.walker_tensors = np.einsum('ab,zFbk->zFak', one_body_op_power, self.walker_tensors) # one_body_op_power defined already
 
         # (x*\bar{x} - \bar{x}^2/2)
-        cfb = np.einsum("zn, zn->z", xi, xbar)-0.5*np.einsum("zn, zn->z", xbar, xbar)
-        cmf = -np.sqrt(self.dt)*np.einsum('zn, n->z', xi-xbar, self.mf_shift)
-        return cfb, cmf
+        N_I = np.einsum("zn, zn->z", xi, F)-0.5*np.einsum("zn, zn->z", F, F)
+        cmf = -np.sqrt(self.dt)*np.einsum('zn,n->z', xi-F, self.mf_shift)
+
+        return N_I, cmf
+
 
 
     def dump_flags(self):

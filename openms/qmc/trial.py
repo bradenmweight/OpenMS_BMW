@@ -85,6 +85,7 @@ class TrialHF(TrialWFBase):
             if ( cavity['photon_basis'] == 'fock' ):
                 print( "photon_basis = ", cavity['photon_basis'] )
                 if ( cavity['NFock'] is not None ): # Introduce Fock state basis for quantized cavity field
+                    print( "NFock = ", cavity['NFock'] )
                     fock_basis    = np.zeros( (cavity['NFock']) )
                     fock_basis[0] = 1.0 # Start from vacuum state as initial guess: |PSI> = |HF> \otimes |n=0>
                     # BMW: 
@@ -93,7 +94,7 @@ class TrialHF(TrialWFBase):
                     self.wf = np.array([ self.wf * fock_basis[i] for i in range(cavity['NFock']) ])
                     print( "Constructing the tensor-product electron-photon basis" )
                     print( "Polariton WFN Shape =", self.wf.shape )
-                    print( "Trial Polariton WFN: |POL> = |HF> \otimes |n = 0>\n", self.wf )
+                    print( "Trial Polariton WFN: |TRIAL> = |HF> \otimes |n = 0>\n", self.wf )
                 else:
                     raise ValueError("Number of Fock states NFock >= 2 must be specified.")
             else:
