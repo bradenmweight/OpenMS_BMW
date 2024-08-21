@@ -34,29 +34,40 @@ class TrialWFBase(object):
                  cavity,
                  #ne: Tuple[int, int],
                  #n_mo : int,
+                 trial = None,
                  mf = None,
                  numdets = 1,
                  numdets_props = 1,
                  numdets_chunks = 1,
                  verbose = 1):
+        
 
         self.mol = mol
         if mf is None:
-            mf = scf.RHF(self.mol)
-        mf.kernel()
+            if ( trial == "RHF" ):
+                mf = scf.RHF(self.mol)
+                mf.kernel()
+            elif ( trial == "UHF" ):
+                # UHF -- BMW: Need to break symmetry of initial guess to get right solution
+                mf = scf.UHF(mol)
+                dm_alpha, dm_beta = mf.get_init_guess()
+                dm_beta[:2,:2] = 0 # BMW: Set some of the beta coefficients to zero to break alpha/beta symmetry
+                dm = (dm_alpha,dm_beta)
+                mf.kernel(dm) # BMW: Pass in modified initial guess
+            else:
+                print("No trial wavefunction selected. Defaulting to RHF.")
+                mf = scf.RHF(self.mol)
+                mf.kernel()
         self.mf = mf
         self.mf.dm = mf.make_rdm1()
-
-        #self.num_elec = num_elec # number of electrons
-        #self.n_mo = n_mo
-        # only works for spin-restricted reference at this moment
-        #self.nalpha = self.nbeta = self.num_elec // 2
 
         self.numdets = numdets
         self.numdets_props = numdets_props
         self.numdets_chunks = numdets_chunks
 
-        self.build( cavity )
+        self.build()
+        self.build_photon( cavity )
+
 
     def build(self):
         r"""
@@ -64,23 +75,12 @@ class TrialWFBase(object):
         """
         pass
 
-# single determinant HF trial wavefunction
-class TrialHF(TrialWFBase):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-
-    def build(self, cavity):
-
-        overlap = self.mol.intor('int1e_ovlp')
-        ao_coeff = lo.orth.lowdin(overlap)
-        xinv = np.linalg.inv(ao_coeff)
-
-        self.wf = self.mf.mo_coeff
-        self.wf = xinv.dot(self.mf.mo_coeff[:, :self.mol.nelec[0]])
-
-        # Define tensor product basis for electron-boson DOFs
+    def build_photon(self, cavity):
+        r"""
+        build initial photon wave function
+        """
         if ( cavity is not None ):
+        # Define tensor product basis for electron-boson DOFs
             print( "wc = ", cavity['cavity_freq'] )
             if ( cavity['photon_basis'] == 'fock' ):
                 print( "photon_basis = ", cavity['photon_basis'] )
@@ -88,9 +88,6 @@ class TrialHF(TrialWFBase):
                     print( "NFock = ", cavity['NFock'] )
                     fock_basis    = np.zeros( (cavity['NFock']) )
                     fock_basis[0] = 1.0 # Start from vacuum state as initial guess: |PSI> = |HF> \otimes |n=0>
-                    # BMW: 
-                    # How to do a tensor product basis with HF if it is a matrix ? It only makes sense with determinents...
-                    #self.wf = np.kron( self.wf, fock_basis )
                     self.wf = np.array([ self.wf * fock_basis[i] for i in range(cavity['NFock']) ])
                     print( "Constructing the tensor-product electron-photon basis" )
                     print( "Polariton WFN Shape =", self.wf.shape )
@@ -100,7 +97,52 @@ class TrialHF(TrialWFBase):
             else:
                 raise NotImplementedError("Only the Fock basis is implemented for photon DOFs. Choose photon_basis='fock'.")
         else:
-            self.wf = self.wf[None,:,:] # Add single Fock basis state for computational ease -- No added scaling due to this
+            self.wf = self.wf[None,:,:,:] # Add dummy Fock dimension for computational ease -- No added scaling due to this
+
+
+
+
+
+
+
+# single determinant HF trial wavefunction
+class TrialHF(TrialWFBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
+    def build(self):
+
+        overlap = self.mol.intor('int1e_ovlp')
+        ao_coeff = lo.orth.lowdin(overlap)
+        xinv = np.linalg.inv(ao_coeff)
+
+        self.wf = self.mf.mo_coeff
+        self.wf = xinv.dot(self.mf.mo_coeff[:, :self.mol.nelec[0]])
+        self.wf = self.wf[None,:,:] # Add dummy dimension for spin
+
+
+# single determinant HF trial wavefunction
+class TrialUHF(TrialWFBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
+    def build(self):
+
+        overlap = self.mol.intor('int1e_ovlp')
+        ao_coeff = lo.orth.lowdin(overlap)
+        xinv = np.linalg.inv(ao_coeff)
+
+        MO_ALPHA = self.mf.mo_coeff[0, :, :self.mol.nelec[0]] # Occupied ALPHA MO Coeffs
+        MO_BETA  = self.mf.mo_coeff[1, :, :self.mol.nelec[1]] # Occupied BETA MO Coeffs
+        self.wf  = [np.dot( xinv, MO_ALPHA )] # ALPHA ORBITALS AFTER LOWDIN ORTHOGONALIZATION
+        self.wf.append(np.dot( xinv, MO_BETA )) # BETA ORBITALS AFTER LOWDIN ORTHOGONALIZATION
+        self.wf  = np.array( self.wf ) # self.wf.shape = (spin, nocc mos per spin, nAOs)
+
+
+
+
 
 
 

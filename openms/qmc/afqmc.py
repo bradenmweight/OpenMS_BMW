@@ -68,7 +68,7 @@ class AFQMC(qmc.QMCbase):
         hs_fields = None
         return hs_fields
 
-    def propagation(self, h1e, xbar, ltensor):
+    def propagation(self, h1e, F, ltensor):
         r"""
         Ref: https://www.cond-mat.de/events/correl13/manuscripts/zhang.pdf
         Eqs 50 - 51
@@ -76,39 +76,38 @@ class AFQMC(qmc.QMCbase):
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
         one_body_op_power   = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('ab,zFbk->zFak', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('ab,zFSbk->zFSak', one_body_op_power, self.walker_tensors)
+
 
         # 2-body propagator propagation
-        # exp[(x-\bar{x}) * L]
-        xi = np.random.normal(0.0, 1.0, self.nfields * self.num_walkers)
-        xi = xi.reshape(self.num_walkers, self.nfields)
-        two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,nab->zab', xi-xbar, ltensor)
-
+        # exp[(x-F) * L], F = sqrt(-dt) <L_n>
+        xi = np.random.normal(0, 1.0, size=(self.num_walkers, self.nfields) )
+        two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,nab->zab', xi - F, ltensor)
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
-            temp = np.einsum('zab,zFbj->zFaj', two_body_op_power, temp) / (order_i + 1.0)
+            temp = np.einsum('zab,zFSbj->zFSaj', two_body_op_power, temp) / (order_i + 1.0)
             self.walker_tensors += temp
-
-
+        
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
-        one_body_op_power = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('ab,zFbj->zFaj', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('ab,zFSbk->zFSak', one_body_op_power, self.walker_tensors) # one_body_op_power defined already
 
         # (x*\bar{x} - \bar{x}^2/2)
-        cfb = np.einsum("zn,zn->z", xi, xbar) - 0.5 * np.einsum("zn,zn->z", xbar, xbar)
-        cmf = -np.sqrt(self.dt) * np.einsum('zn,n->z', xi-xbar, self.mf_shift)
-        return cfb, cmf
+        N_I = np.einsum("zn, zn->z", xi, F)-0.5*np.einsum("zn, zn->z", F, F)
+        cmf = -np.sqrt(self.dt)*np.einsum('zn,n->z', xi-F, self.mf_shift)
 
-    def get_wfn(self):
-        """
-        Get the wavefunction
-        """
-        coeffs = self.walker_coeff
-        wfns   = self.walker_tensors
-        wfn    = np.einsum('z,zFak->Fak', coeffs, wfns)
-        norm   = np.linalg.det( np.einsum('Faj,Fak->jk', wfn.conj(), wfn ) )
-        return wfn / np.sqrt( norm )
+        return N_I, cmf
+
+def get_wfn(self):
+    """
+    Get the wavefunction
+    """
+    coeffs = self.walker_coeff
+    wfns   = self.walker_tensors
+    wfn    = np.einsum('z,zFSak->FSak', coeffs, wfns)
+    norm   = np.linalg.det( np.einsum('FSaj,FSak->jk', wfn.conj(), wfn ) )
+    norm   = np.prod( norm )
+    return wfn / np.sqrt( norm )
 
 
 class QEDAFQMC(AFQMC):
@@ -180,13 +179,21 @@ class QEDAFQMC(AFQMC):
         return h1e, eri, ltensor
 
 
-
     def local_energy(self, h1e, eri, G1p):
-        tmp  = 2 * np.einsum("prqs,zFGpr->zFGqs", eri, G1p)
-        tmp -=     np.einsum("prqs,zFGps->zFGqr", eri, G1p)
-        
-        e1   = 2 * np.einsum("zFFpq,pq->z",   G1p, h1e)
-        e2   =     np.einsum("zGFqs,zGFqs->z", tmp, G1p)
+        r"""Compute local energy
+             E = \sum_{pq\sigma} T_{pq} G_{pq\sigma}
+                 + \frac{1}{2}\sum_{pqrs\sigma\sigma'} I_{prqs} G_{pr\sigma} G_{qs\sigma'}
+                 - \frac{1}{2}\sum_{pqrs\sigma} I_{pqrs} G_{ps\sigma} G_{qr\sigma}
+        """
+        # E_coul
+        tmp  = 2.0 * np.einsum("prqs,zFFSpr->zqs", eri, G1p) * self.spin_fac
+        ecoul = np.einsum("zqs,zFFSqs->z", tmp, G1p)
+        # E_xx
+        tmp =  np.einsum("prqs,zFFSps->zSqr", eri, G1p)
+        exx  = np.einsum("zSqs,zFFSqs->z", tmp, G1p)
+        e2 = (ecoul - exx) * self.spin_fac
+
+        e1   = 2 * np.einsum("zFFSpq,pq->z",   G1p, h1e) * self.spin_fac
 
         #bilinear = 2 * np.einsum( "FGab,zFGab->z", self.MuQc, G1p )
 
@@ -194,7 +201,6 @@ class QEDAFQMC(AFQMC):
         energy = e1 + e2 + self.energy_nuc + ZPE #+ bilinear
 
         return energy
-
 
 
     def propagate_bilinear_coupling( self ):
@@ -206,7 +212,7 @@ class QEDAFQMC(AFQMC):
         # We could reshape, then use expm(MuQc) if done properly
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
-            temp = np.einsum('FGab,zGbj->zFaj', -self.dt * self.MuQc, temp) / (order_i + 1.0)
+            temp = np.einsum('FGab,zGSbj->zFSaj', -self.dt * self.MuQc, temp) / (order_i + 1.0)
             self.walker_tensors += temp
 
 
@@ -220,7 +226,7 @@ class QEDAFQMC(AFQMC):
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
         one_body_op_power   = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('ab,zFbk->zFak', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('ab,zFSbk->zFSak', one_body_op_power, self.walker_tensors)
 
 
         # 2-body propagator propagation
@@ -229,7 +235,7 @@ class QEDAFQMC(AFQMC):
         two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,nab->zab', xi - F, ltensor)
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
-            temp = np.einsum('zab,zFbj->zFaj', two_body_op_power, temp) / (order_i + 1.0)
+            temp = np.einsum('zab,zFSbj->zFSaj', two_body_op_power, temp) / (order_i + 1.0)
             self.walker_tensors += temp
         
         #### PROPAGATE QED TERMS ####
@@ -238,7 +244,7 @@ class QEDAFQMC(AFQMC):
 
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
-        self.walker_tensors = np.einsum('ab,zFbk->zFak', one_body_op_power, self.walker_tensors) # one_body_op_power defined already
+        self.walker_tensors = np.einsum('ab,zFSbk->zFSak', one_body_op_power, self.walker_tensors) # one_body_op_power defined already
 
         # (x*\bar{x} - \bar{x}^2/2)
         N_I = np.einsum("zn, zn->z", xi, F)-0.5*np.einsum("zn, zn->z", F, F)

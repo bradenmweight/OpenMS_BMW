@@ -22,7 +22,7 @@ import itertools
 import logging
 import random
 
-from openms.qmc.trial import TrialHF
+from openms.qmc.trial import TrialHF, TrialUHF
 from openms import runtime_refs, _citations
 from pyscf.lib import logger
 
@@ -68,6 +68,7 @@ class QMCbase(object):
         mf = None,
         dt = 0.005,
         cavity_freq = None,
+        trial = None,
         nsteps = 25,
         total_time = 5.0,
         num_walkers = 100,
@@ -125,6 +126,9 @@ class QMCbase(object):
         self.walker_tensors = None
         self.compute_wavefunction = compute_wavefunction
 
+        self.trial = trial
+
+
         self.mf_shift = None
         self.print_freq = 1
 
@@ -138,13 +142,23 @@ class QMCbase(object):
         self.build() # setup calculations
 
 
+
     def build(self):
         r"""
         Build up the afqmc calculations
         """
         # set up trial wavefunction
         logger.info(self, "\n========  Initialize Trial WF and Walker  ======== \n")
-        self.trial = TrialHF(self.mol, self.cavity)
+        if ( self.trial == "RHF" ):
+            self.trial = TrialHF(self.mol, cavity=self.cavity, trial=self.trial)
+            self.spin_fac = 1.0
+        elif ( self.trial == "UHF" ):
+            self.trial = TrialUHF(self.mol, cavity=self.cavity, trial=self.trial)
+            self.spin_fac = 0.5
+        elif ( self.trial is None ):
+            print("No trial wfn selected. Defaulting to RHF.")
+            self.trial = TrialHF(self.mol)
+            self.spin_fac = 1.0
 
         # set up walkers
         # TODO: move this into walker class
@@ -153,11 +167,15 @@ class QMCbase(object):
         self.walker_coeff = np.array([1.] * self.num_walkers)
 
 
+    
+
+
+
     def make_read_fcidump(self, norb):
         import tempfile
         ftmp = tempfile.NamedTemporaryFile()
         tools.fcidump.from_mo(self.mol, ftmp.name, self.ao_coeff)
-        h1e, eri, _ = read_fcidump(ftmp.name, norb) # BMW: Nuclear energy is done elsewhere
+        h1e, eri, self.nuc_energy = read_fcidump(ftmp.name, norb) # BMW: Nuclear energy is done elsewhere
         return h1e, eri
 
     def make_ltensor(self, eri, norb):
@@ -197,8 +215,10 @@ class QMCbase(object):
         return observables
 
     def walker_trial_overlap(self):
-        return np.einsum('Faj,zFak->zjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,MO,MO)
-
+        O = np.einsum('FSaj,zFSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Spin, MO,MO)
+        O = np.linalg.det( O ) #  # (Walker,Spin)
+        return np.prod( O, axis=1) # Product over determinants of MO overlaps for each spin
+    
     def renormalization_YuZhang(self):
         r"""
         Renormalizaiton and orthogonaization of walkers
@@ -215,18 +235,14 @@ class QMCbase(object):
         """
 
         # Orthogonalize the walkers
-        shape         = self.walker_tensors[0].shape
+        shape         = self.walker_tensors[0].shape # (Fock, Spin, AO, MO)
+        self.walker_tensors = self.walker_tensors.swapaxes(1,2) # (walkers,Fock,Spin,AO,MO) --> (walkers,Spin,Fock,AO,MO)
         ortho_walkers = np.zeros_like(self.walker_tensors)
         for zi in range( self.num_walkers ):
-            tmp = self.walker_tensors[zi].reshape( -1, shape[-1] ) # (Fock,AO,MO) --> (Fock*AO,MO)
-            ortho_walkers[zi] = np.linalg.qr( tmp )[0].reshape( shape ) # (Fock*AO,MO) --> (Fock,AO,MO)
-        self.walker_tensors = ortho_walkers
-
-        # Normalize the Walkers (Simple Way)
-        # overlap = np.einsum('zFaj, zFak->zjk', self.walker_tensors.conj(), self.walker_tensors) # (Walker,MO,MO)
-        # overlap = np.linalg.det( overlap ) # (Walker)
-        # for z in range( self.num_walkers ):
-        #     self.walker_tensors[z] = self.walker_tensors[z] / np.sqrt( overlap[z] )
+            for s in range( shape[1] ):
+                tmp = self.walker_tensors[zi,s,:,:,:].reshape( -1, shape[-1] ) # (Fock,AO,MO) --> (Fock*AO,MO)
+                ortho_walkers[zi,s] = np.linalg.qr( tmp )[0].reshape( (shape[0],shape[2],shape[3]) ) # (Fock*AO,MO) --> (Fock,AO,MO)
+        self.walker_tensors = ortho_walkers.swapaxes(1,2) # (walkers,Spin,Fock,AO,MO) --> (walkers,Fock,Spin,AO,MO)
 
         # BMW:
         # I noticed that the coefficients become huge numbers during propagation.
@@ -237,19 +253,26 @@ class QMCbase(object):
         #print( "Norm of Walker Coeffs:", np.sum( self.walker_coeff ) )
         #self.walker_coeff = self.walker_coeff / np.sum( np.abs(self.walker_coeff) )
 
-
     def local_energy(self, h1e, eri, G1p):
+        r"""Compute local energy
+             E = \sum_{pq\sigma} T_{pq} G_{pq\sigma}
+                 + \frac{1}{2}\sum_{pqrs\sigma\sigma'} I_{prqs} G_{pr\sigma} G_{qs\sigma'}
+                 - \frac{1}{2}\sum_{pqrs\sigma} I_{pqrs} G_{ps\sigma} G_{qr\sigma}
         """
-        F is a placeholder. If this function runs, the F dimension is of shape=(1)
-        """
-        tmp  = 2 * np.einsum("prqs,zFFpr->zqs", eri, G1p)
-        tmp -=     np.einsum("prqs,zFFps->zqr", eri, G1p)
-        
-        e1   = 2 * np.einsum("zFFpq,pq->z",   G1p, h1e)
-        e2   =     np.einsum("zqs,zFFqs->z", tmp, G1p)
+        # E_coul
+        tmp  = 2.0 * np.einsum("prqs,zFFSpr->zqs", eri, G1p) * self.spin_fac
+        ecoul = np.einsum("zqs,zFFSqs->z", tmp, G1p)
+        # E_xx
+        tmp =  np.einsum("prqs,zFFSps->zSqr", eri, G1p)
+        exx  = np.einsum("zSqs,zFFSqs->z", tmp, G1p)
+        e2 = (ecoul - exx) * self.spin_fac
 
-        energy = e1 + e2 + self.energy_nuc
+        e1   = 2 * np.einsum("zFFSpq,pq->z",   G1p, h1e) * self.spin_fac
+
+        energy = e1 + e2 + self.nuc_energy
         return energy
+
+
 
     def update_weight(self, oldoverlap, cfb, cmf, local_energy):
         r"""
@@ -257,8 +280,6 @@ class QMCbase(object):
         oldoverlap (float): old overlap
         """
         newoverlap = self.walker_trial_overlap()
-        newoverlap = np.linalg.det( newoverlap ) # Det in electronic sub-space
-        if ( len(oldoverlap.shape) >= 2 ): oldoverlap = np.linalg.det( oldoverlap )
 
         # be cautious! power of 2 was neglected before.
         overlap_ratio = (newoverlap / oldoverlap)**2
@@ -304,8 +325,8 @@ class QMCbase(object):
         logger.info(self, "\n======== get integrals ========")
         h1e, eri, ltensor = self.get_integrals()
         shifted_h1e   = np.zeros(h1e.shape)
-        rho_mf        = np.einsum( "Faj,Fbj->ab", self.trial.wf, self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
-        self.mf_shift = 1j * np.einsum("nab,ab->n", ltensor, rho_mf) # Compute <L_n>
+        rho_mf        = np.einsum( "FSaj,FSbj->Sab", self.trial.wf, self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
+        self.mf_shift = 1j * np.einsum("nab,Sab->n", ltensor, rho_mf) # Compute <L_n>
 
         for p, q in itertools.product(range(h1e.shape[0]), repeat=2):
             shifted_h1e[p, q] = h1e[p, q] - 0.5 * np.trace(eri[p, :, :, q])
@@ -313,7 +334,7 @@ class QMCbase(object):
         #shifted_h1e = shifted_h1e - np.einsum("n,nab->ab", self.mf_shift, 1j*ltensor)
         shifted_h1e     = shifted_h1e + np.einsum("n,nab->ab", self.mf_shift, ltensor)
 
-        self.precomputed_ltensor = np.einsum("Faj,nab->Fnjb", self.trial.wf.conj(), ltensor) # shape = (Fock,Ntensors,NMO,NAO)
+        self.precomputed_ltensor = np.einsum("FSaj,nab->FSnjb", self.trial.wf.conj(), ltensor) # shape = (Fock,Ntensors,NMO,NAO)
 
         time = 0.0
         energy_list = []
@@ -324,17 +345,17 @@ class QMCbase(object):
             dump_result = (int(time/self.dt) % self.print_freq  == 0)
 
             # pre-processing: prepare walker tensor
-            overlap     = self.walker_trial_overlap() # (Walker,MO,MO) # Photon already summed over
+            overlap     = self.walker_trial_overlap() # (Walker) # Photon and spin taken care of already
             ### VERSION 1 BMW ###
-            # overlap     = np.linalg.det( overlap ) # Det in electronic sub-space
-            # Theta       = np.einsum("zFaj,z->zFaj", self.walker_tensors, 1/overlap)  # (Walker,Fock,AO,MO)
+            #overlap     = np.linalg.det( overlap ) # Det in electronic sub-space
+            Theta       = np.einsum("zFSaj,z->zFSaj", self.walker_tensors, 1/overlap)  # (Walker,Fock,Spin,AO,MO)
             ### VERSION 2 YZ ###
-            inv_overlap = np.linalg.inv(overlap) # (Walker,MO,MO)
-            Theta       = np.einsum("zFaj,zjk->zFak", self.walker_tensors, inv_overlap)  # (Walker,Fock,AO,MO)
+            #inv_overlap = np.linalg.inv(overlap) # (Walker,MO,MO)
+            #Theta       = np.einsum("zFSaj,zSjk->zFSak", self.walker_tensors, inv_overlap)  # (Walker,Fock,AO,MO)
 
-            G1p          = np.einsum("zFaj,Gbj->zFGab", Theta, self.trial.wf.conj())       # shape = (Nwalkers,Fock,NAO,NAO)
-            lTheta       = np.einsum('Fnja,zFak->zFnjk', self.precomputed_ltensor, Theta)  # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)
-            trace_lTheta = np.einsum('zFnjj->zn', lTheta)                                 # shape = (Nwalkers,Ntensors)
+            G1p          = np.einsum("zFSaj,GSbj->zFGSab", Theta, self.trial.wf.conj())       # shape = (Nwalkers,Fock,NAO,NAO)
+            lTheta       = np.einsum('FSnja,zFSak->zFSnjk', self.precomputed_ltensor, Theta)  # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)
+            trace_lTheta = np.einsum('zFSnjj->zn', lTheta)                                 # shape = (Nwalkers,Ntensors)
 
             # compute local energy for each walker
             local_energy = self.local_energy(h1e, eri, G1p)
