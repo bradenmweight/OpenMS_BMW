@@ -211,39 +211,21 @@ class QMCbase(object):
             ortho_walkers[idx] = np.linalg.qr(self.walker_tensors[idx])[0]
         self.walker_tensors = ortho_walkers
 
-    def local_energy_YuZhang_ORIG(self, h1e, eri, G1p):
-        tmp  = 2 * np.einsum("prqs,zSpr->zSqs", eri, G1p)
-        tmp -=     np.einsum("prqs,zSps->zSqr", eri, G1p)
-        
-        e1   = 2 * np.einsum("zSpq,pq->z",   G1p, h1e)
-        e2   =     np.einsum("zSqs,zSqs->z", tmp, G1p)
+    def local_energy(self, h1e, eri, G1p):
+        r"""Compute local energy
+             E = \sum_{pq\sigma} T_{pq} G_{pq\sigma}
+                 + \frac{1}{2}\sum_{pqrs\sigma\sigma'} I_{prqs} G_{pr\sigma} G_{qs\sigma'}
+                 - \frac{1}{2}\sum_{pqrs\sigma} I_{pqrs} G_{ps\sigma} G_{qr\sigma}
+        """
+        # E_coul
+        tmp  = 2.0 * np.einsum("prqs,zSpr->zqs", eri, G1p) * self.spin_fac
+        ecoul = np.einsum("zqs,zSqs->z", tmp, G1p)
+        # E_xx
+        tmp =  np.einsum("prqs,zSps->zSqr", eri, G1p)
+        exx  = np.einsum("zSqs,zSqs->z", tmp, G1p)
+        e2 = (ecoul - exx) * self.spin_fac
 
-        energy = e1 + e2 + self.nuc_energy
-        return energy
-
-    def local_energy_YuZhang(self, h1e, eri, G1p):
-        tmp  = 2 * np.einsum("prqs,zSpr->zSqs", eri, G1p) * self.spin_fac
-        tmp -=     np.einsum("prqs,zSps->zSqr", eri, G1p) #* self.spin_fac
-        
         e1   = 2 * np.einsum("zSpq,pq->z",   G1p, h1e) * self.spin_fac
-        e2   =     np.einsum("zSqs,zSqs->z", tmp, G1p)
-
-        energy = e1 + e2 + self.nuc_energy
-        return energy
-
-    def local_energy(self, h1e, eri, G1p, trace_lTheta, lTheta, ltensor):
-        # BMW:
-        # Is this the same factors with and without spin ?
-        # Eq. 72-74, J. Chem. Phys. 154, 024107 (2021)
-
-        # One-body Terms
-        e1   = 2 * np.einsum("zSjk,jk->z", G1p, h1e)
-
-        # Two-body Terms
-        Hartree   = np.einsum("zn->z", trace_lTheta**2 )
-        tmp       = np.einsum("zSnjk,zSnkl->zSnjl", lTheta, lTheta ) # Eq. 74, J. Chem. Phys. 154, 024107 (2021)
-        Exchange  = np.einsum("zSnjj->z", tmp)
-        e2        = 0.5 * (Hartree - Exchange)
 
         energy = e1 + e2 + self.nuc_energy
         return energy
@@ -381,11 +363,10 @@ class QMCbase(object):
             trace_lTheta = np.einsum('zSnjj->zn', lTheta) # shape = (Nwalkers,Ntensors)
 
             # compute local energy for each walker
-            local_energy = self.local_energy_YuZhang(h1e, eri, G1p)
-            #local_energy = self.local_energy(h1e, eri, G1p, trace_lTheta, lTheta, ltensor)
-            #energy = np.einsum("a,a->", self.walker_coeff, local_energy ) / self.num_walkers
-            energy = np.sum([self.walker_coeff[i]*local_energy[i] for i in range(len(local_energy))])
-            energy = energy / np.sum(self.walker_coeff)
+            local_energy = self.local_energy(h1e, eri, G1p)
+            energy = np.sum( self.walker_coeff * local_energy ) / np.sum(self.walker_coeff)
+            #energy = np.sum([self.walker_coeff[i]*local_energy[i] for i in range(len(local_energy))])
+            #energy = energy / np.sum(self.walker_coeff)
 
             # imaginary time propagation
             xbar = -np.sqrt(self.dt) * (1j * 2 * trace_lTheta - self.mf_shift) # shape = (Nwalkers,Ntensors)

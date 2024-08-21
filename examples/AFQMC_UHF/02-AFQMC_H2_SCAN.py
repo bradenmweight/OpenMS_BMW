@@ -16,9 +16,8 @@ if __name__ == "__main__":
     basis = '321g' # "cc-pvdz" # "sto3g"
     bmin = 1.0
     bmax = 6.0
-    bond_list_coarse = np.arange( bmin,bmax+1.0,1.0 ) # Bohr
+    bond_list_coarse = np.arange( bmin,bmax+0.25,0.25 ) # Bohr
     bond_list_fine   = np.arange( bmin,bmax+0.05,0.05 ) # Bohr
-    #bond_list_fine   = np.arange( bmin,bmax+0.05,0.05 ) # Bohr
 
     time_list  = []
     E_AFQMC    = []
@@ -57,7 +56,7 @@ if __name__ == "__main__":
         mol = gto.M(atom=atoms, basis=basis, unit='Bohr', verbose=3)
         # AFQMC
         num_walkers     = 5000
-        dt              = 0.1 # 0.1
+        dt              = 0.01 # 0.1
         total_time      = 10.0
         afqmc_obj       = afqmc.AFQMC(mol, numdets=1, trial="RHF", dt=dt, total_time=total_time, num_walkers=num_walkers, energy_scheme="hybrid")
         times, energies = afqmc_obj.kernel()
@@ -69,6 +68,9 @@ if __name__ == "__main__":
         if ( bi == 0 ):
             time_list = np.array(times)
             #break
+
+        print( "rAFQMC Energy: %1.3f" % (np.average(E_AFQMC[-1][len(time_list)//4:], axis=-1) ) )
+        print( "uAFQMC Energy: %1.3f" % (np.average(E_uAFQMC[-1][len(time_list)//4:], axis=-1) ) )
 
     
     E_AFQMC = np.array(E_AFQMC).real
