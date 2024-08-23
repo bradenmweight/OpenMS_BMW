@@ -195,10 +195,10 @@ class QEDAFQMC(AFQMC):
 
         e1   = 2 * np.einsum("zFFSpq,pq->z",   G1p, h1e) * self.spin_fac
 
-        #bilinear = 2 * np.einsum( "FGab,zFGab->z", self.MuQc, G1p )
+        bilinear = 2 * np.einsum( "FGab,zFGab->z", self.MuQc, G1p )
 
         ZPE = 0.5 * np.sum(self.cavity_freq) # Zero-point energy of the cavity mode
-        energy = e1 + e2 + self.energy_nuc + ZPE #+ bilinear
+        energy = e1 + e2 + self.energy_nuc + ZPE + bilinear
 
         return energy
 
