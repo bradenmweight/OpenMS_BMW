@@ -14,11 +14,11 @@ if __name__ == "__main__":
     DATA_DIR = "02-AFQMC_QED_coupling_scan"
     sp.call(f"mkdir -p {DATA_DIR}", shell=True)
 
-    basis        = "ccpvdz"
+    basis        = "sto3g"
     photon_basis = 'fock'
     NFock        = 3
     bond_length  = 1.5 # 2.8 # Bohr
-    lam_list     = np.arange( 0.0, 0.5+0.05, 0.05 )
+    lam_list     = np.arange( 0.0, 0.5+0.1, 0.1 )
 
 
 
