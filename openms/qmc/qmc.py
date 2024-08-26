@@ -215,7 +215,7 @@ class QMCbase(object):
         return observables
 
     def walker_trial_overlap(self):
-        O = np.einsum('FSaj,zFSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Spin, MO,MO)
+        O = np.einsum('FSaj,zFSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Spin,MO,MO)
         O = np.linalg.det( O ) #  # (Walker,Spin)
         return np.prod( O, axis=1) # Product over determinants of MO overlaps for each spin
     
@@ -260,12 +260,12 @@ class QMCbase(object):
                  - \frac{1}{2}\sum_{pqrs\sigma} I_{pqrs} G_{ps\sigma} G_{qr\sigma}
         """
         # E_coul
-        tmp  = 2.0 * np.einsum("prqs,zFFSpr->zqs", eri, G1p) * self.spin_fac
-        ecoul = np.einsum("zqs,zFFSqs->z", tmp, G1p)
+        tmp   = 2.0 * np.einsum("prqs,zFFSpr->zqs", eri, G1p) * self.spin_fac
+        ecoul =       np.einsum("zqs,zFFSqs->z", tmp, G1p)
         # E_xx
-        tmp =  np.einsum("prqs,zFFSps->zSqr", eri, G1p)
+        tmp  = np.einsum("prqs,zFFSps->zSqr", eri, G1p)
         exx  = np.einsum("zSqs,zFFSqs->z", tmp, G1p)
-        e2 = (ecoul - exx) * self.spin_fac
+        e2   = (ecoul - exx) * self.spin_fac
 
         e1   = 2 * np.einsum("zFFSpq,pq->z",   G1p, h1e) * self.spin_fac
 
@@ -279,7 +279,10 @@ class QMCbase(object):
         Update the walker coefficients
         oldoverlap (float): old overlap
         """
-        newoverlap = self.walker_trial_overlap()
+        newoverlap = self.walker_trial_overlap() # (Walkers)
+        if ( len(oldoverlap.shape) == 4 ): # (walkers,Spin,MO,MO)
+            oldoverlap = np.linalg.det( oldoverlap ) # (walkers,Spin)
+            oldoverlap = np.prod( oldoverlap, axis=-1 ) # (walkers)
 
         # be cautious! power of 2 was neglected before.
         overlap_ratio = (newoverlap / oldoverlap)**2
@@ -345,17 +348,19 @@ class QMCbase(object):
             dump_result = (int(time/self.dt) % self.print_freq  == 0)
 
             # pre-processing: prepare walker tensor
-            overlap     = self.walker_trial_overlap() # (Walker) # Photon and spin taken care of already
             ### VERSION 1 BMW ###
-            #overlap     = np.linalg.det( overlap ) # Det in electronic sub-space
-            Theta       = np.einsum("zFSaj,z->zFSaj", self.walker_tensors, 1/overlap)  # (Walker,Fock,Spin,AO,MO)
+            #overlap     = self.walker_trial_overlap() # (Walker)
+            #Theta       = np.einsum("zFSaj,z->zFSaj", self.walker_tensors, 1/overlap)  # (Walker,Fock,Spin,AO,MO)
             ### VERSION 2 YZ ###
-            #inv_overlap = np.linalg.inv(overlap) # (Walker,MO,MO)
-            #Theta       = np.einsum("zFSaj,zSjk->zFSak", self.walker_tensors, inv_overlap)  # (Walker,Fock,AO,MO)
+            overlap      = np.einsum('FSaj,zFSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Spin,MO,MO)
+            inv_overlap  = np.linalg.inv(overlap) # (Walker,Spin,MO,MO)
+            Theta        = np.einsum("zFSaj,zSjk->zFSak", self.walker_tensors, inv_overlap)    # (Walker,Fock,AO,MO)
+            
+            G1p          = np.einsum("zFSaj,GSbj->zFGSab", Theta, self.trial.wf.conj())        # shape = (Nwalkers,Fock,NAO,NAO)
+            trace_lTheta = np.einsum('FSnja,zFSaj->zn', self.precomputed_ltensor, Theta)       # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)
+            #lTheta       = np.einsum('FSnja,zFSak->zFSnjk', self.precomputed_ltensor, Theta)  # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)
+            #trace_lTheta = np.einsum('zFSnjj->zn', lTheta)                                    # shape = (Nwalkers,Ntensors)
 
-            G1p          = np.einsum("zFSaj,GSbj->zFGSab", Theta, self.trial.wf.conj())       # shape = (Nwalkers,Fock,NAO,NAO)
-            lTheta       = np.einsum('FSnja,zFSak->zFSnjk', self.precomputed_ltensor, Theta)  # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)
-            trace_lTheta = np.einsum('zFSnjj->zn', lTheta)                                 # shape = (Nwalkers,Ntensors)
 
             # compute local energy for each walker
             local_energy = self.local_energy(h1e, eri, G1p)

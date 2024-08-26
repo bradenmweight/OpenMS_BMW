@@ -121,6 +121,9 @@ class TrialHF(TrialWFBase):
         self.wf = xinv.dot(self.mf.mo_coeff[:, :self.mol.nelec[0]])
         self.wf = self.wf[None,:,:] # Add dummy dimension for spin
 
+        print("Trial RHF wavefunction shape: ", self.wf.shape)
+        print("Trial RHF wavefunction:\n", self.wf)
+
 
 # single determinant HF trial wavefunction
 class TrialUHF(TrialWFBase):
@@ -139,7 +142,8 @@ class TrialUHF(TrialWFBase):
         self.wf  = [np.dot( xinv, MO_ALPHA )] # ALPHA ORBITALS AFTER LOWDIN ORTHOGONALIZATION
         self.wf.append(np.dot( xinv, MO_BETA )) # BETA ORBITALS AFTER LOWDIN ORTHOGONALIZATION
         self.wf  = np.array( self.wf ) # self.wf.shape = (spin, nocc mos per spin, nAOs)
-
+        print("Trial UHF wavefunction shape: ", self.wf.shape)
+        print("Trial UHF wavefunction:\n", self.wf)
 
 
 
