@@ -159,12 +159,9 @@ class QEDAFQMC(AFQMC):
             self.DSE_factor      = self.cavity_coupling**2 / 2
             self.MuQc            = np.einsum("m,FG,mab->FGab", self.bilinear_factor, self.aTa, self.dipole_ao_polarized)
             
+            # For use later in integral calculations
             self.h1e_DSE         = np.einsum("m,mab->ab", self.DSE_factor, -1*self.quadrupole_ao_polarized )
-            self.exp_h1e_DSE     = scipy.linalg.expm( -self.dt/2 * self.h1e_DSE )
             self.eri_DSE         = np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.dipole_ao_polarized, self.dipole_ao_polarized )
-
-
-
 
     def get_integrals(self):
         ao_overlap      = self.mol.intor('int1e_ovlp')
@@ -174,6 +171,9 @@ class QEDAFQMC(AFQMC):
         h1e, eri = self.make_read_fcidump( self.NAO )
         h1e     += self.h1e_DSE
         eri     += self.eri_DSE
+
+        # For use later in the QED propagation
+        self.exp_h1e = scipy.linalg.expm( -self.dt/2 * h1e )
 
         ltensor = self.make_ltensor( eri, self.NAO )
         return h1e, eri, ltensor
@@ -204,8 +204,7 @@ class QEDAFQMC(AFQMC):
 
 
     def propagate_bilinear_coupling( self ):
-        # BMW:
-        # Bilinear propagation
+        # Full-step Bilinear propagation
 
         # BMW:
         # I put Taylor expansion here to keep the four-index matrix notation for einsum. 
@@ -225,8 +224,9 @@ class QEDAFQMC(AFQMC):
         """
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
-        one_body_op_power   = scipy.linalg.expm(-self.dt/2 * h1e)
-        self.walker_tensors = np.einsum('ab,zFSbk->zFSak', one_body_op_power, self.walker_tensors)
+        #one_body_op_power   = scipy.linalg.expm(-self.dt/2 * h1e)
+        #self.walker_tensors = np.einsum('ab,zFSbk->zFSak', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('ab,zFSbk->zFSak', self.exp_h1e, self.walker_tensors)
 
 
         # 2-body propagator propagation
@@ -244,7 +244,8 @@ class QEDAFQMC(AFQMC):
 
         # 1-body propagator propagation
         # e^{-dt/2*H1e}
-        self.walker_tensors = np.einsum('ab,zFSbk->zFSak', one_body_op_power, self.walker_tensors) # one_body_op_power defined already
+        #self.walker_tensors = np.einsum('ab,zFSbk->zFSak', one_body_op_power, self.walker_tensors)
+        self.walker_tensors = np.einsum('ab,zFSbk->zFSak', self.exp_h1e, self.walker_tensors)
 
         # (x*\bar{x} - \bar{x}^2/2)
         N_I = np.einsum("zn, zn->z", xi, F)-0.5*np.einsum("zn, zn->z", F, F)

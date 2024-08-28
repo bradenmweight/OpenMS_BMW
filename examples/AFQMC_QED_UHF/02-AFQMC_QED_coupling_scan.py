@@ -20,7 +20,7 @@ if __name__ == "__main__":
     NFock            = 3
     bmin             = 0.0
     bmax             = 0.5
-    coupling_list_coarse = np.arange( bmin,bmax+0.05,0.05 ) # Bohr
+    coupling_list_coarse = np.arange( bmin,bmax+0.1,0.1 ) # Bohr
 
     time_list      = []
     E_rAFQMC_QED   = []
@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
 
     # QMC params
-    num_walkers     = 25000 # 5000 is converged for this system
+    num_walkers     = 5000 # 5000 is converged for this system
     dt              = 0.01 # 0.1 is converged for this system
     total_time      = 10.0
 
@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
     print("\n\tDoing AFQMC calculations.")
     for bi,b in enumerate(coupling_list_coarse):
-        print("\n\n\tDoing calculations for R(H-H) = %1.3f Bohr." % b)
+        print("\n\n\tDoing calculations for lambda_c = %1.3f a.u." % b)
 
         cavity_coupling = np.array([b]) # np.sqrt(2*cavity_freq) * 0.1 # Convert from A0 to lambda coupling
         cavity_mode     = np.einsum("m,md->md", cavity_coupling, cavity_vec ) / np.linalg.norm(cavity_vec,axis=-1)
@@ -84,7 +84,7 @@ if __name__ == "__main__":
             #dm       = mf.make_rdm1()
             #E_QEDHF[bi] = qedmf.kernel(dm0=dm) # Supply initial guess for QED-HF from HF
             qedmf = mqed.HF(mol, xc=None, cavity_mode=cavity_mode, cavity_freq=cavity_freq)
-            qedmf.max_cycle = 5000
+            qedmf.max_cycle = 1000
             qedmf.kernel()
             if ( qedmf.conv_check == False ):
                 print("   Warning! QED-HF did not converge. Setting energy to NaN.")

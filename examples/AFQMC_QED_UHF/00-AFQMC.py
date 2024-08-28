@@ -20,14 +20,14 @@ if __name__ == "__main__":
     NFock        = 3
 
     # Cavity parameters
-    cavity_freq     = np.array([2/27.2114])
-    cavity_coupling = np.array([0.0]) # np.sqrt(2*cavity_freq) * 0.1 # Convert from A0 to lambda coupling
+    cavity_freq     = np.array([0.1])
+    cavity_coupling = np.array([0.4]) # np.sqrt(2*cavity_freq) * 0.1 # Convert from A0 to lambda coupling
     cavity_vec      = np.array([np.array([1,0,0])])
     cavity_mode     = np.einsum("m,md->md", cavity_coupling, cavity_vec ) / np.linalg.norm(cavity_vec,axis=-1)
 
 
 
-    atoms = [("H", 0.0, 0, 0), ("H", 2.0, 0, 0)]
+    atoms = [("H", 0.0, 0, 0), ("H", 1.5, 0, 0)]
     mol = gto.M(atom=atoms, basis=basis, unit='Bohr', verbose=3)
 
     # HF
@@ -40,7 +40,7 @@ if __name__ == "__main__":
 
     try:
         qedmf = mqed.HF(mol, xc=None, cavity_mode=cavity_mode, cavity_freq=cavity_freq)
-        qedmf.max_cycle = 5000
+        qedmf.max_cycle = 500
         qedmf.kernel()
         if ( qedmf.conv_check == False ):
             print("   Warning! QED-HF did not converge. Setting energy to NaN.")
@@ -62,9 +62,9 @@ if __name__ == "__main__":
 
 
     # QMC params
-    num_walkers     = 5000 # 5000 is converged for this system
+    num_walkers     = 50 # 5000 is converged for this system
     dt              = 0.1 # 0.1 is converged for this system
-    total_time      = 10.0 # 10.0
+    total_time      = 100.0 # 10.0
     
     # rAFQMC
     T0 = time()
@@ -108,6 +108,8 @@ if __name__ == "__main__":
     print( "uAFQMC Energy: %1.6f" % E_uAFQMC_AVE)
     print( "rQED-AFQMC Energy: %1.6f" % E_rAFQMC_QED_AVE)
     print( "uQED-AFQMC Energy: %1.6f" % E_uAFQMC_QED_AVE)
+    print( "FCI Energy: %1.6f" % E_FCI)
+    print( "FCI + hw/2 Energy: %1.6f" % (E_FCI + cavity_freq[0]/2) )
 
 
 

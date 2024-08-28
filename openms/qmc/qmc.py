@@ -74,7 +74,7 @@ class QMCbase(object):
         num_walkers = 100,
         renorm_freq = 10,
         random_seed = random.randint(1,1_000_000), #1,
-        taylor_order = 6,
+        taylor_order = 10,
         energy_scheme = None,
         batched = False,
         cavity = None,
@@ -217,7 +217,8 @@ class QMCbase(object):
     def walker_trial_overlap(self):
         O = np.einsum('FSaj,zFSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Spin,MO,MO)
         O = np.linalg.det( O ) #  # (Walker,Spin)
-        return np.prod( O, axis=1) # Product over determinants of MO overlaps for each spin
+        O = np.prod( O, axis=1) # Product over determinants of MO overlaps for each spin
+        return O
     
     def renormalization_YuZhang(self):
         r"""
@@ -274,7 +275,7 @@ class QMCbase(object):
 
 
 
-    def update_weight(self, oldoverlap, cfb, cmf, local_energy):
+    def update_weight(self, oldoverlap, N_I, cmf, local_energy):
         r"""
         Update the walker coefficients
         oldoverlap (float): old overlap
@@ -290,13 +291,13 @@ class QMCbase(object):
         # the hybrid energy scheme
         if self.energy_scheme == "hybrid":
             self.ebound = (2.0 / self.dt) ** 0.5
-            hybrid_energy = -(np.log(overlap_ratio) + cfb + cmf) / self.dt
+            hybrid_energy = -(np.log(overlap_ratio) + N_I + cmf) / self.dt
             hybrid_energy = np.clip(hybrid_energy.real, a_min=-self.ebound, a_max=self.ebound, out=hybrid_energy.real)
             self.hybrid_energy = hybrid_energy if self.hybrid_energy is None else self.hybrid_energy
 
             importance_func = np.exp(-self.dt * 0.5 * (hybrid_energy + self.hybrid_energy))
             self.hybrid_energy = hybrid_energy
-            phase = (-self.dt * self.hybrid_energy-cfb).imag
+            phase = (-self.dt * self.hybrid_energy-N_I).imag
             phase_factor = np.array([max(0, np.cos(iphase)) for iphase in phase])
             importance_func = np.abs(importance_func) * phase_factor
 

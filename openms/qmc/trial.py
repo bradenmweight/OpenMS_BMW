@@ -91,7 +91,7 @@ class TrialWFBase(object):
                     self.wf = np.array([ self.wf * fock_basis[i] for i in range(cavity['NFock']) ])
                     print( "Constructing the tensor-product electron-photon basis" )
                     print( "Polariton WFN Shape =", self.wf.shape )
-                    print( "Trial Polariton WFN: |TRIAL> = |HF> \otimes |n = 0>\n", self.wf )
+                    print( "Trial Polariton WFN: |TRIAL> = |HF> \\otimes |n = 0>\n", self.wf )
                 else:
                     raise ValueError("Number of Fock states NFock >= 2 must be specified.")
             else:
@@ -105,7 +105,7 @@ class TrialWFBase(object):
 
 
 
-# single determinant HF trial wavefunction
+# single determinant rHF trial wavefunction
 class TrialHF(TrialWFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -125,7 +125,7 @@ class TrialHF(TrialWFBase):
         print("Trial RHF wavefunction:\n", self.wf)
 
 
-# single determinant HF trial wavefunction
+# single determinant uHF trial wavefunction
 class TrialUHF(TrialWFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
