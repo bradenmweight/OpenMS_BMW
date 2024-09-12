@@ -18,7 +18,7 @@ import sys
 from pyscf import tools, lo, scf, fci
 import numpy as np
 import scipy
-import itertools
+#import itertools
 import logging
 import random
 
@@ -129,7 +129,7 @@ class QMCbase(object):
         self.trial = trial
 
 
-        self.mf_shift = None
+        self.L_mf = None
         self.print_freq = 1
 
         self.hybrid_energy = None
@@ -318,6 +318,18 @@ class QMCbase(object):
         """
         pass
 
+    def get_apply_background_mf_shift(self, h1e, eri, ltensor):
+        from itertools import product
+        shifted_h1e   = np.zeros_like( h1e )
+        rho_mf        = np.einsum( "FSaj,FSbj->Sab", self.trial.wf, self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
+        self.L_mf = 1j * np.einsum("nab,Sab->n", ltensor, rho_mf) # Compute <L_n>_mf
+
+        for p, q in product(range(h1e.shape[0]), repeat=2):
+            shifted_h1e[p, q] = h1e[p, q] - 0.5 * np.trace(eri[p, :, :, q])
+
+        shifted_h1e = shifted_h1e - np.einsum("n,nab->ab", self.L_mf, 1j*ltensor)
+        return shifted_h1e
+
     def kernel(self, trial_wf=None):
         r"""
         trial_wf: trial wavefunction
@@ -328,15 +340,9 @@ class QMCbase(object):
 
         logger.info(self, "\n======== get integrals ========")
         h1e, eri, ltensor = self.get_integrals()
-        shifted_h1e   = np.zeros(h1e.shape)
-        rho_mf        = np.einsum( "FSaj,FSbj->Sab", self.trial.wf, self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
-        self.mf_shift = 1j * np.einsum("nab,Sab->n", ltensor, rho_mf) # Compute <L_n>
 
-        for p, q in itertools.product(range(h1e.shape[0]), repeat=2):
-            shifted_h1e[p, q] = h1e[p, q] - 0.5 * np.trace(eri[p, :, :, q])
 
-        #shifted_h1e = shifted_h1e - np.einsum("n,nab->ab", self.mf_shift, 1j*ltensor)
-        shifted_h1e     = shifted_h1e + np.einsum("n,nab->ab", self.mf_shift, ltensor)
+        shifted_h1e = self.get_apply_background_mf_shift( h1e, eri, ltensor )
 
         self.precomputed_ltensor = np.einsum("FSaj,nab->FSnjb", self.trial.wf.conj(), ltensor) # shape = (Fock,Ntensors,NMO,NAO)
 
@@ -349,19 +355,12 @@ class QMCbase(object):
             dump_result = (int(time/self.dt) % self.print_freq  == 0)
 
             # pre-processing: prepare walker tensor
-            ### VERSION 1 BMW ###
-            #overlap     = self.walker_trial_overlap() # (Walker)
-            #Theta       = np.einsum("zFSaj,z->zFSaj", self.walker_tensors, 1/overlap)  # (Walker,Fock,Spin,AO,MO)
-            ### VERSION 2 YZ ###
             overlap      = np.einsum('FSaj,zFSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Spin,MO,MO)
             inv_overlap  = np.linalg.inv(overlap) # (Walker,Spin,MO,MO)
             Theta        = np.einsum("zFSaj,zSjk->zFSak", self.walker_tensors, inv_overlap)    # (Walker,Fock,AO,MO)
             
             G1p          = np.einsum("zFSaj,GSbj->zFGSab", Theta, self.trial.wf.conj())        # shape = (Nwalkers,Fock,NAO,NAO)
             trace_lTheta = np.einsum('FSnja,zFSaj->zn', self.precomputed_ltensor, Theta)       # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)
-            #lTheta       = np.einsum('FSnja,zFSak->zFSnjk', self.precomputed_ltensor, Theta)  # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)
-            #trace_lTheta = np.einsum('zFSnjj->zn', lTheta)                                    # shape = (Nwalkers,Ntensors)
-
 
             # compute local energy for each walker
             local_energy = self.local_energy(h1e, eri, G1p)
@@ -369,7 +368,7 @@ class QMCbase(object):
             energy       = energy / np.sum(self.walker_coeff)
 
             # imaginary time propagation
-            F        = -np.sqrt(self.dt) * (1j * 2 * trace_lTheta - self.mf_shift) # shape = (Nwalkers,Ntensors)
+            F        = -np.sqrt(self.dt) * (1j * 2 * trace_lTheta - self.L_mf) # shape = (Nwalkers,Ntensors)
             N_I, cmf = self.propagation(shifted_h1e, F, ltensor)
             self.update_weight(overlap, N_I, cmf, local_energy)
 
