@@ -50,13 +50,13 @@ class TrialWFBase(object):
             elif ( trial == "UHF" ):
                 # UHF -- BMW: Need to break symmetry of initial guess to get right solution
                 mf1 = scf.UHF(mol)
-                dm_alpha, dm_beta = mf.get_init_guess()
+                dm_alpha, dm_beta = mf1.get_init_guess()
                 dm_beta[:2,:2] = 0 # BMW: Set some of the beta coefficients to zero to break alpha/beta symmetry
                 dm = (dm_alpha,dm_beta)
                 mf1.kernel(dm) # BMW: Pass in modified initial guess
                 mf2 = scf.UHF(mol)
-                dm_alpha, dm_beta = mf.get_init_guess()
-                dm_beta[:2,:2] = 0 # BMW: Set some of the beta coefficients to zero to break alpha/beta symmetry
+                dm_alpha, dm_beta = mf2.get_init_guess()
+                dm_beta[:,:] = 0 # BMW: Set some of the beta coefficients to zero to break alpha/beta symmetry
                 dm = (dm_alpha,dm_beta)
                 mf2.kernel(dm) # BMW: Pass in modified initial guess
 
