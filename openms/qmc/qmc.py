@@ -74,7 +74,7 @@ class QMCbase(object):
         num_walkers = 100,
         renorm_freq = 10,
         random_seed = random.randint(1,1_000_000), #1,
-        taylor_order = 10,
+        taylor_order = 6,
         energy_scheme = None,
         batched = False,
         cavity = None,
@@ -214,10 +214,11 @@ class QMCbase(object):
         observables = None
         return observables
 
-    def walker_trial_overlap(self):
+    def walker_trial_overlap(self, full=False):
         O = np.einsum('FSaj,zFSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Spin,MO,MO)
-        O = np.linalg.det( O ) #  # (Walker,Spin)
-        O = np.prod( O, axis=1) # Product over determinants of MO overlaps for each spin
+        if full:
+            O = np.linalg.det( O ) # (Walker,Spin)
+            O = np.prod( O, axis=1) # (Walker) -- Product over determinants of MO overlaps for each spin
         return O
     
     def renormalization_YuZhang(self):
@@ -280,10 +281,7 @@ class QMCbase(object):
         Update the walker coefficients
         oldoverlap (float): old overlap
         """
-        newoverlap = self.walker_trial_overlap() # (Walkers)
-        if ( len(oldoverlap.shape) == 4 ): # (walkers,Spin,MO,MO)
-            oldoverlap = np.linalg.det( oldoverlap ) # (walkers,Spin)
-            oldoverlap = np.prod( oldoverlap, axis=-1 ) # (walkers)
+        newoverlap = self.walker_trial_overlap(full=True) # (Walkers)
 
         # be cautious! power of 2 was neglected before.
         overlap_ratio = (newoverlap / oldoverlap)**2
@@ -351,13 +349,15 @@ class QMCbase(object):
         time_list = []
         wavefunction_list = []
         while time <= self.total_time:
-            #print( time )
+            if ( round(time,5) % 1.0 == 0.0 ):
+                print( "%1.4f of %1.4f" %(time, self.total_time) )
             dump_result = (int(time/self.dt) % self.print_freq  == 0)
 
             # pre-processing: prepare walker tensor
-            overlap      = np.einsum('FSaj,zFSak->zSjk', self.trial.wf.conj(), self.walker_tensors) # (Walker,Spin,MO,MO)
+            overlap      = self.walker_trial_overlap(full=False) # (Walker,Spin,MO,MO)
             inv_overlap  = np.linalg.inv(overlap) # (Walker,Spin,MO,MO)
             Theta        = np.einsum("zFSaj,zSjk->zFSak", self.walker_tensors, inv_overlap)    # (Walker,Fock,AO,MO)
+            overlap      = np.prod(np.linalg.det(overlap), axis=1) # (Walker) -- BMW: for use in updating weights later
             
             G1p          = np.einsum("zFSaj,GSbj->zFGSab", Theta, self.trial.wf.conj())        # shape = (Nwalkers,Fock,NAO,NAO)
             trace_lTheta = np.einsum('FSnja,zFSaj->zn', self.precomputed_ltensor, Theta)       # shape = (Nwalkers,Fock,Ntensors,NMO,NMO)

@@ -174,7 +174,6 @@ class QEDAFQMC(AFQMC):
         eri_DSE            = 2 * np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.dipole_ao_polarized, self.dipole_ao_polarized )
 
         if ( self.do_coherent_state == True ):
-            eri_DSE_tmp = eri_DSE * 1
             # Modify QED terms if coherent state shift is to be applied
             print( "Performing coherent state shift based on trial wavefunction." )
             rho_mf              = np.einsum( "FSaj,FSbj->ab", self.trial.wf, self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
@@ -184,7 +183,7 @@ class QEDAFQMC(AFQMC):
             
             self.mu_shifted     = self.dipole_ao_polarized - dipole_mf # \hat{\mu} - <\mu>
             self.MuQc           = np.einsum("m,FG,mab->FGab", self.bilinear_factor, self.aT_plus_a, self.mu_shifted) # Replace with shifted version
-            eri_DSE             = 2 * np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.mu_shifted, self.mu_shifted )
+            eri_DSE             = 2 * np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.mu_shifted, self.mu_shifted ) # Replace with shifted version
 
 
         h1e     += h1e_DSE
