@@ -142,14 +142,6 @@ class QEDAFQMC(AFQMC):
             self.qedmf.kernel()  
             self.photon            = Photon(self.mol,self.qedmf,omega=self.cavity_freq,vec=self.cavity_vec,gfac=self.cavity_coupling)
             
-            self.dipole_ao_polarized = []
-            for mode in range( self.NMODE ):
-                self.dipole_ao_polarized.append( self.photon.get_polarized_dipole_ao(mode) )
-            self.dipole_ao_polarized     = np.array(self.dipole_ao_polarized)        
-            self.NAO                     = self.dipole_ao_polarized.shape[-1]
-            self.quadrupole_ao           = get_quadrupole_ao(mol, add_nuc_dipole=True).reshape( (3,3,self.NAO,self.NAO) )
-            self.quadrupole_ao_polarized = np.einsum("mx,xyab,my->mab", self.cavity_vec, self.quadrupole_ao, self.cavity_vec)
-            
 
             # Define photon parameters
             self.photon_basis    = photon_basis
@@ -159,32 +151,50 @@ class QEDAFQMC(AFQMC):
             self.aT_plus_a       = self.a.T + self.a
             self.bilinear_factor = np.sqrt(self.cavity_freq/2) * self.cavity_coupling
             self.DSE_factor      = self.cavity_coupling**2 / 2
-            self.MuQc            = np.einsum("m,FG,mab->FGab", self.bilinear_factor, self.aT_plus_a, self.dipole_ao_polarized)
+
+
+    def make_dipole_octopole(self):
+
+        self.dipole_ao_polarized = []
+        for mode in range( self.NMODE ):
+            self.dipole_ao_polarized.append( self.photon.get_polarized_dipole_ao(mode) )
+        self.dipole_ao_polarized     = np.array(self.dipole_ao_polarized)    
+        self.NAO                     = self.dipole_ao_polarized.shape[-1]
+        self.quadrupole_ao           = get_quadrupole_ao(self.mol, add_nuc_dipole=True).reshape( (3,3,self.NAO,self.NAO) )
+        self.quadrupole_ao_polarized = np.einsum("mx,xyab,my->mab", self.cavity_vec, self.quadrupole_ao, self.cavity_vec)
+        
+        # Orthogonalize the dipole_ao_polarized and quadrupole_ao_polarized by Lowdin
+        ao_overlap      = self.mol.intor('int1e_ovlp')
+        self.ao_coeff   = lo.orth.lowdin(ao_overlap) # Need this to be defined as self for fcidum line. DO NOT REMOVE.
+        xinv            = np.linalg.inv(self.ao_coeff)
+        self.dipole_ao_polarized     = np.einsum( "ab,mbc,cd->mad", xinv, self.dipole_ao_polarized, xinv.T )
+        self.quadrupole_ao_polarized = np.einsum( "ab,mbc,cd->mad", xinv, self.quadrupole_ao_polarized, xinv.T )
 
     def get_integrals(self):
-        ao_overlap      = self.mol.intor('int1e_ovlp')
-        self.ao_coeff   = lo.orth.lowdin(ao_overlap) # Need this to be defined here. DO NOT REMOVE.
+
+        self.make_dipole_octopole() # Make in orthogonal AO basis
+        self.MuQc = np.einsum("m,FG,mab->FGab", self.bilinear_factor, self.aT_plus_a, self.dipole_ao_polarized)
+
+
 
         # This is the fcidump way of doing things. Everything here is in AO basis
         h1e, eri = self.make_read_fcidump( self.NAO )
 
         ### Do bare QED terms
-        h1e_DSE            = np.einsum("m,mab->ab", self.DSE_factor, -1*self.quadrupole_ao_polarized )
-        # BMW: YZ says that eri does not have the 1/2 from the DSE factor. I multiplied by 2 to fix this.
-        eri_DSE            = 2 * np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.dipole_ao_polarized, self.dipole_ao_polarized )
+        h1e_DSE   = np.einsum("m,mab->ab", self.DSE_factor, -1*self.quadrupole_ao_polarized ) # TODO -- How to do CS on this ?
+        # BMW: YZ says that eri should have factor 2 from HS transform
+        eri_DSE   = 2 * np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.dipole_ao_polarized, self.dipole_ao_polarized )
 
-        if ( self.do_coherent_state == True ):
+        if ( self.do_coherent_state == False ):
             # Modify QED terms if coherent state shift is to be applied
             print( "Performing coherent state shift based on trial wavefunction." )
-            rho_mf              = np.einsum( "FSaj,FSbj->ab", self.trial.wf, self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
-            dipole_mf           = np.einsum( "mab,ab->m", self.dipole_ao_polarized, rho_mf )
-            print( "<\\mu>_Trial =", dipole_mf )
-            dipole_mf           = np.array([ np.identity( self.NAO ) * dipole_mf[m] for m in range(self.NMODE) ]) # (NMode, NAO, NAO)
-            
-            self.mu_shifted     = self.dipole_ao_polarized - dipole_mf # \hat{\mu} - <\mu>
-            self.MuQc           = np.einsum("m,FG,mab->FGab", self.bilinear_factor, self.aT_plus_a, self.mu_shifted) # Replace with shifted version
-            eri_DSE             = 2 * np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.mu_shifted, self.mu_shifted ) # Replace with shifted version
-
+            rho_mf          = np.einsum( "FSaj,FSbj->ab", self.trial.wf.conj(), self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
+            self.mu_mf_pol  = np.einsum( "mab,ab->m", self.dipole_ao_polarized, rho_mf )
+            self.mu_mf_pol  = np.array([ np.identity( self.NAO ) * self.mu_mf_pol[m] for m in range(self.NMODE) ]) # (NMode, NAO, NAO)
+            self.mu_shifted = self.dipole_ao_polarized - self.mu_mf_pol # \hat{\mu} - <\mu>
+            self.MuQc       = np.einsum("m,FG,mab->FGab", self.bilinear_factor, self.aT_plus_a, self.mu_shifted) # Replace with shifted version
+            eri_DSE         = 2 * np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.mu_shifted, self.mu_shifted ) # Replace with shifted version
+            print( "<\\mu>_Trial =", self.mu_mf_pol[0,0,0] )
 
         h1e     += h1e_DSE
         eri     += eri_DSE
@@ -192,13 +202,17 @@ class QEDAFQMC(AFQMC):
         ltensor = self.make_ltensor( eri, self.NAO )
         return h1e, eri, ltensor
 
-
     def local_energy(self, h1e, eri, G1p):
         r"""Compute local energy
              E = \sum_{pq\sigma} T_{pq} G_{pq\sigma}
                  + \frac{1}{2}\sum_{pqrs\sigma\sigma'} I_{prqs} G_{pr\sigma} G_{qs\sigma'}
                  - \frac{1}{2}\sum_{pqrs\sigma} I_{pqrs} G_{ps\sigma} G_{qr\sigma}
+
+        Note: eri and h1e include the DSE terms
+            If do_coherent_state == True, eri and MuQC will also be generated based on shifted dipole
+            Therefore, the energy computed here would be directly the CS Hamiltonian energy
         """
+
         # E_coul
         tmp  = 2.0 * np.einsum("prqs,zFFSpr->zqs", eri, G1p) * self.spin_fac
         ecoul = np.einsum("zqs,zFFSqs->z", tmp, G1p)
@@ -218,15 +232,20 @@ class QEDAFQMC(AFQMC):
 
 
     def propagate_bilinear_coupling( self ):
+
         # Half-step Bilinear propagation
-        # BMW:
-        # I put Taylor expansion here to keep the four-index matrix notation for einsum.
-        # We could reshape, then use expm(MuQc) if done properly
-        
         temp = self.walker_tensors.copy()
         for order_i in range(self.taylor_order):
-            temp = np.einsum('FGab,zGSbj->zFSaj', -0.5 * self.dt * self.MuQc, temp) / (order_i + 1.0)
+            temp = np.einsum('FGab,zGSbj->zFSaj', -0.5 * self.dt * self.MuQc, temp, optimize=True) / (order_i + 1.0)
             self.walker_tensors += temp
+
+        aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+        aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
+        aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+        aa1 = np.average( aa1, axis=0 ) # (NFock)
+        print("Prob. per Fock State =", aa1)
+
+
 
     def propagate_photon_hamiltonian( self ):
         # Half-step photon propagation

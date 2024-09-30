@@ -73,7 +73,7 @@ class QMCbase(object):
         total_time = 5.0,
         num_walkers = 100,
         renorm_freq = 10,
-        random_seed = random.randint(1,1_000_000), #1,
+        #random_seed = random.randint(1,1_000_000), #1,
         taylor_order = 6,
         energy_scheme = None,
         batched = False,
@@ -121,7 +121,7 @@ class QMCbase(object):
         self.taylor_order = taylor_order
         self.num_walkers = num_walkers
         self.renorm_freq = renorm_freq
-        self.random_seed = random_seed
+        #self.random_seed = random_seed
         self.walker_coeff = None
         self.walker_tensors = None
         self.compute_wavefunction = compute_wavefunction
@@ -231,7 +231,7 @@ class QMCbase(object):
         self.walker_tensors = ortho_walkers
 
 
-    def renormalization(self):
+    def renormalization_complicated(self):
         r"""
         Renormalizaiton and orthogonaization of walkers
         """
@@ -254,6 +254,26 @@ class QMCbase(object):
         #   instability without this correction
         #print( "Norm of Walker Coeffs:", np.sum( self.walker_coeff ) )
         #self.walker_coeff = self.walker_coeff / np.sum( np.abs(self.walker_coeff) )
+
+    def renormalization(self):
+        r"""
+        Renormalizaiton and orthogonaization of walkers
+        """
+
+        photon_norm = np.einsum("zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors) # (Walkers,Fock,Spin,MO,MO)
+        photon_norm = np.linalg.det( photon_norm ) # (Walkers,Fock,Spin)
+        photon_norm = np.prod( photon_norm, axis=1) # (Walkers,Fock)
+
+        # Orthogonalize the walkers
+        ortho_walkers = np.zeros_like(self.walker_tensors)
+        shape         = self.walker_tensors[0].shape # (Fock, Spin, AO, MO)
+        for z in range( self.num_walkers ):
+            for F in range( shape[0] ):
+                for s in range( shape[1] ):
+                    ortho_walkers[z,F,s,:,:] = np.linalg.qr( self.walker_tensors[z,F,s,:,:] )[0]
+                    ortho_walkers[z,F,s,:,:] = ortho_walkers[z,F,s,:,:] * photon_norm[z,F]
+        self.walker_tensors = ortho_walkers
+
 
     def local_energy(self, h1e, eri, G1p):
         r"""Compute local energy
@@ -334,7 +354,7 @@ class QMCbase(object):
         TBA
         """
 
-        np.random.seed(self.random_seed)
+        #np.random.seed(self.random_seed)
 
         logger.info(self, "\n======== get integrals ========")
         h1e, eri, ltensor = self.get_integrals()
@@ -373,10 +393,20 @@ class QMCbase(object):
             self.update_weight(overlap, N_I, cmf, local_energy)
 
 
+
+
             if ( int(time / self.dt) % self.renorm_freq == 0 ):
-               #print("Renormalizing at time %1.3f" % time)
-               self.renormalization()
-            #print( time, np.min(S), np.average(S), np.max(S) )
+                print("\n")
+                S = np.einsum('zFSaj,zFSak->zSjk', self.walker_tensors.conj(), self.walker_tensors)
+                S = np.linalg.det(S).real
+                S = np.prod(S,axis=-1)
+                print( "%1.3f %1.3f %1.3f %1.3f " % (time, np.min(S), np.average(S), np.max(S) ) )
+                self.walker_tensors = np.einsum("zFSaj,z->zFSaj", self.walker_tensors, 1/np.sqrt(S) )
+                # self.renormalization()
+                # S = np.einsum('zFSaj,zFSak->zSjk', self.walker_tensors.conj(), self.walker_tensors)
+                # S = np.linalg.det(S).real
+                # S = np.prod(S,axis=-1)
+                # print( "%1.3f %1.3f %1.3f %1.3f " % (time, np.min(S), np.average(S), np.max(S) ) )
 
             # print energy and time
             if dump_result:
