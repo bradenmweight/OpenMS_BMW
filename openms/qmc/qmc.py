@@ -72,7 +72,7 @@ class QMCbase(object):
         nsteps = 25,
         total_time = 5.0,
         num_walkers = 100,
-        renorm_freq = 10,
+        renorm_freq = 1,
         #random_seed = random.randint(1,1_000_000), #1,
         taylor_order = 6,
         energy_scheme = None,
@@ -231,31 +231,45 @@ class QMCbase(object):
         self.walker_tensors = ortho_walkers
 
 
+    # def renormalization(self):
+
+    #     OVLP = np.einsum( "zFSaj,zFSak->zSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, Spin, NMO, NMO)
+    #     OVLP = np.linalg.det( OVLP ) # (w, Spin)
+    #     OVLP = np.prod( OVLP, axis=-1 ) # (w)
+    #     print( np.average(OVLP).real )
+    #     self.walker_tensors = np.einsum("zFSaj,z->zFSaj", self.walker_tensors, 1 / np.sqrt(OVLP) )
+    #     OVLP = np.einsum( "zFSaj,zFSak->zSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, Spin, NMO, NMO)
+    #     OVLP = np.linalg.det( OVLP ) # (w, Spin)
+    #     OVLP = np.prod( OVLP, axis=-1 ) # (w)
+    #     print( np.average(OVLP).real )
+
+    #     aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+    #     aa1 = np.linalg.det( aa1 ) # (w, NFock, Spin)
+    #     aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+    #     aa1 = np.average( aa1, axis=0 ) # (NFock)
+    #     print("CCC Prob. per Fock State =", aa1.real)
+
     def renormalization(self):
-        r"""
-        Renormalizaiton and orthogonaization of walkers
-        """
 
-        # Orthogonalize the walkers
-        shape         = self.walker_tensors[0].shape # (Fock, Spin, AO, MO)
-        self.walker_tensors = self.walker_tensors.swapaxes(1,2) # (walkers,Fock,Spin,AO,MO) --> (walkers,Spin,Fock,AO,MO)
-        ortho_walkers = np.zeros_like(self.walker_tensors)
-        for zi in range( self.num_walkers ):
-            for s in range( shape[1] ):
-                tmp = self.walker_tensors[zi,s,:,:,:].reshape( -1, shape[-1] ) # (Fock,AO,MO) --> (Fock*AO,MO)
-                ortho_walkers[zi,s] = np.linalg.qr( tmp )[0].reshape( (shape[0],shape[2],shape[3]) ) # (Fock*AO,MO) --> (Fock,AO,MO)
-        self.walker_tensors = ortho_walkers.swapaxes(1,2) # (walkers,Spin,Fock,AO,MO) --> (walkers,Fock,Spin,AO,MO)
+        # OVLP = np.einsum( "zFSaj,zFSak->zSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, Spin, NMO, NMO)
+        # OVLP = np.linalg.det( OVLP ) # (w, Spin)
+        # OVLP = np.prod( OVLP, axis=-1 ) # (w)
+        # print( "AAA", np.average(OVLP).real )
 
-        # BMW:
-        # I noticed that the coefficients become huge numbers during propagation.
-        # e.g., 155232006980.58905
-        # Here, we renormalize the coefficients to avoid numerical instability.
-        # This does not seem to affect the results, but there could be numerical 
-        #   instability without this correction
-        #print( "Norm of Walker Coeffs:", np.sum( self.walker_coeff ) )
-        #self.walker_coeff = self.walker_coeff / np.sum( np.abs(self.walker_coeff) )
+        # print( "AAA", self.walker_tensors[0] )
 
+        shape = self.walker_tensors.shape
+        for z in range(self.walker_tensors.shape[0]):
+            ortho_walkers          = self.walker_tensors[z].reshape( -1, shape[-1] )
+            ortho_walkers          = np.linalg.qr(ortho_walkers)[0]
+            self.walker_tensors[z] = ortho_walkers.reshape( shape[1:] )
 
+        # print( "BBB", self.walker_tensors[0] )
+
+        # OVLP = np.einsum( "zFSaj,zFSak->zSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, Spin, NMO, NMO)
+        # OVLP = np.linalg.det( OVLP ) # (w, Spin)
+        # OVLP = np.prod( OVLP, axis=-1 ) # (w)
+        # print( "BBB", np.average(OVLP).real )
 
 
     def local_energy(self, h1e, eri, G1p):
@@ -354,6 +368,11 @@ class QMCbase(object):
         while time <= self.total_time:
             if ( round(time,5) % 1.0 == 0.0 ):
                 print( "%1.4f of %1.4f" %(time, self.total_time) )
+                aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+                aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
+                aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+                aa1 = np.average( aa1, axis=0 ) # (NFock)
+                print("Prob. per Fock State =", aa1)
             dump_result = (int(time/self.dt) % self.print_freq  == 0)
 
             # pre-processing: prepare walker tensor
@@ -375,21 +394,8 @@ class QMCbase(object):
             N_I, cmf = self.propagation(shifted_h1e, F, ltensor)
             self.update_weight(overlap, N_I, cmf, local_energy)
 
-
-
-
             if ( int(time / self.dt) % self.renorm_freq == 0 ):
-                print("\n")
-                S = np.einsum('zFSaj,zFSak->zSjk', self.walker_tensors.conj(), self.walker_tensors)
-                S = np.linalg.det(S).real
-                S = np.prod(S,axis=-1)
-                print( "%1.3f %1.3f %1.3f %1.3f " % (time, np.min(S), np.average(S), np.max(S) ) )
-                #self.walker_tensors = np.einsum("zFSaj,z->zFSaj", self.walker_tensors, 1/np.sqrt(S) )
                 self.renormalization()
-                # S = np.einsum('zFSaj,zFSak->zSjk', self.walker_tensors.conj(), self.walker_tensors)
-                # S = np.linalg.det(S).real
-                # S = np.prod(S,axis=-1)
-                # print( "%1.3f %1.3f %1.3f %1.3f " % (time, np.min(S), np.average(S), np.max(S) ) )
 
             # print energy and time
             if dump_result:

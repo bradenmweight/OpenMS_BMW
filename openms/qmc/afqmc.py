@@ -117,40 +117,44 @@ class QEDAFQMC(AFQMC):
                  cavity_freq = None,
                  cavity_coupling = None,
                  cavity_vec = None,
-                 photon_basis = None,
-                 NFock = None,
+                 photon_basis = 'fock',
+                 NFock = 2,
+                 do_coherent_state = True,
                  **kwargs):
         
+        assert ( cavity_freq     is not None ), "Cavity frequency           is not provided to QED-AFQMC class."
+        assert ( cavity_coupling is not None ), "Cavity coupling            is not provided to QED-AFQMC class."
+        assert ( cavity_vec      is not None ), "Cavity polarization vector is not provided to QED-AFQMC class."
+        
         cavity = {}
-        cavity['cavity_freq'] = cavity_freq
+        cavity['cavity_freq']     = cavity_freq
         cavity['cavity_coupling'] = cavity_coupling
-        cavity['cavity_vec'] = cavity_vec
-        cavity['photon_basis'] = photon_basis.lower()
-        cavity['NFock'] = NFock
+        cavity['cavity_vec']      = cavity_vec
+        cavity['photon_basis']    = photon_basis.lower()
+        cavity['NFock']           = NFock
 
         super().__init__(mol, cavity=cavity, **kwargs)
 
         # Cavity Parameters
-        if ( cavity_freq is not None ):
-            self.do_coherent_state = True
-            self.cavity_freq       = cavity_freq
-            self.cavity_coupling   = cavity_coupling
-            self.cavity_vec        = cavity_vec / np.linalg.norm( cavity_vec )
-            self.cavity_mode       = cavity_coupling * cavity_vec # To match with definition in qedhf.py -- I think coupling and vector should be separated.
-            self.NMODE             = len(cavity_freq)
-            self.qedmf             = QEDRHF(self.mol, cavity_mode=self.cavity_mode, cavity_freq=self.cavity_freq)
-            self.qedmf.kernel()  
-            self.photon            = Photon(self.mol,self.qedmf,omega=self.cavity_freq,vec=self.cavity_vec,gfac=self.cavity_coupling)
-            
+        self.do_coherent_state = do_coherent_state
+        self.cavity_freq       = cavity_freq
+        self.cavity_coupling   = cavity_coupling
+        self.cavity_vec        = cavity_vec / np.linalg.norm( cavity_vec )
+        self.cavity_mode       = cavity_coupling * cavity_vec # To match with definition in qedhf.py -- my opinion is that coupling and vector should be separated.
+        self.NMODE             = len(cavity_freq)
+        self.qedmf             = QEDRHF(self.mol, cavity_mode=self.cavity_mode, cavity_freq=self.cavity_freq)
+        self.qedmf.kernel()  
+        self.photon            = Photon(self.mol,self.qedmf,omega=self.cavity_freq,vec=self.cavity_vec,gfac=self.cavity_coupling)
+        
 
-            # Define photon parameters
-            self.photon_basis    = photon_basis
-            self.NFock           = NFock
-            self.a               = np.diag( np.sqrt(np.arange(1,self.NFock)), k=1 ) # Define photon operator
-            self.aTa             = self.a.T @ self.a
-            self.aT_plus_a       = self.a.T + self.a
-            self.bilinear_factor = np.sqrt(self.cavity_freq/2) * self.cavity_coupling
-            self.DSE_factor      = self.cavity_coupling**2 / 2
+        # Define photon parameters
+        self.photon_basis    = photon_basis
+        self.NFock           = NFock
+        self.a               = np.diag( np.sqrt(np.arange(1,self.NFock)), k=1 ) # Define photon operator
+        self.aTa             = self.a.T @ self.a
+        self.aT_plus_a       = self.a.T + self.a
+        self.bilinear_factor = np.sqrt(self.cavity_freq/2) * self.cavity_coupling
+        self.DSE_factor      = self.cavity_coupling**2 / 2
 
 
     def make_dipole_octopole(self):
@@ -164,9 +168,9 @@ class QEDAFQMC(AFQMC):
         self.quadrupole_ao_polarized = np.einsum("mx,xyab,my->mab", self.cavity_vec, self.quadrupole_ao, self.cavity_vec)
         
         # Orthogonalize the dipole_ao_polarized and quadrupole_ao_polarized by Lowdin
-        ao_overlap      = self.mol.intor('int1e_ovlp')
-        self.ao_coeff   = lo.orth.lowdin(ao_overlap) # Need this to be defined as self for fcidum line. DO NOT REMOVE.
-        xinv            = np.linalg.inv(self.ao_coeff)
+        ao_overlap                   = self.mol.intor('int1e_ovlp')
+        self.ao_coeff                = lo.orth.lowdin(ao_overlap) # Need this to be defined as self for fcidum line. DO NOT REMOVE.
+        xinv                         = np.linalg.inv(self.ao_coeff)
         self.dipole_ao_polarized     = np.einsum( "ab,mbc,cd->mad", xinv, self.dipole_ao_polarized, xinv.T )
         self.quadrupole_ao_polarized = np.einsum( "ab,mbc,cd->mad", xinv, self.quadrupole_ao_polarized, xinv.T )
 
@@ -185,7 +189,7 @@ class QEDAFQMC(AFQMC):
         # BMW: YZ says that eri should have factor 2 from HS transform
         eri_DSE   = 2 * np.einsum("m,mab,mcd->abcd", self.DSE_factor, self.dipole_ao_polarized, self.dipole_ao_polarized )
 
-        if ( self.do_coherent_state == False ):
+        if ( self.do_coherent_state == True ):
             # Modify QED terms if coherent state shift is to be applied
             print( "Performing coherent state shift based on trial wavefunction." )
             rho_mf          = np.einsum( "FSaj,FSbj->ab", self.trial.wf.conj(), self.trial.wf ) # rho_mf in AO Basis (electronic subspace only)
@@ -231,31 +235,83 @@ class QEDAFQMC(AFQMC):
         return energy
 
 
-    def propagate_bilinear_coupling( self ):
-
-        # Half-step Bilinear propagation
-        temp = self.walker_tensors.copy()
-        for order_i in range(self.taylor_order):
-            temp = np.einsum('FGab,zGSbj->zFSaj', -0.5 * self.dt * self.MuQc, temp, optimize=True) / (order_i + 1.0)
-            self.walker_tensors += temp
-
-        aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
-        aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
-        aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
-        aa1 = np.average( aa1, axis=0 ) # (NFock)
-        print("Prob. per Fock State =", aa1)
-
-
 
     def propagate_photon_hamiltonian( self ):
         # Half-step photon propagation
 
         # exp_Hph is diagonal in the Fock basis
-        waTa = np.einsum("m,F->mF", self.cavity_freq, np.arange(self.NFock)) # (NMode, NFock)
-        waTa = np.sum( waTa, axis=0 ) # (NFock)
-        evol_Hph = np.exp( -0.5 * self.dt * waTa ) # (NFock)
+        wcaTa    = np.einsum("m,F->F", self.cavity_freq, np.arange(self.NFock)) # (NFock)
+        evol_Hph = np.exp( -0.5 * self.dt * wcaTa ) # (NFock)
+        # print( wcaTa )
+        # print( evol_Hph )
+        #aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+        #aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
+        #aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+        #aa1 = np.average( aa1, axis=0 ) # (NFock)
+        #print("AAA Prob. per Fock State =", aa1)
         self.walker_tensors = np.einsum( "F,zFSaj->zFSaj", evol_Hph, self.walker_tensors )
+        #aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+        #aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
+        #aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+        #aa1 = np.average( aa1, axis=0 ) # (NFock)
+        #print("BBB Prob. per Fock State =", aa1)
 
+
+    # def propagate_bilinear_coupling( self ):
+
+    #     aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+    #     aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
+    #     aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+    #     aa1 = np.average( aa1, axis=0 ) # (NFock)
+    #     print("AAA Prob. per Fock State =", aa1)
+
+
+
+    #     aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+    #     aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
+    #     aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+    #     aa1 = np.average( aa1, axis=0 ) # (NFock)
+    #     print("BBB Prob. per Fock State =", aa1)
+
+
+    def propagate_bilinear_coupling( self ):
+
+        # OVLP = np.einsum( "zFSaj,zFSak->zSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, Spin, NMO, NMO)
+        # OVLP = np.linalg.det( OVLP ) # (w, Spin)
+        # OVLP = np.prod( OVLP, axis=-1 ) # (w)
+        # print( "AAA", np.average(OVLP).real )
+
+        # aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+        # aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
+        # aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+        # aa1 = np.average( aa1, axis=0 ) # (NFock)
+        # print("CCC Prob. per Fock State =", aa1)
+
+        ####### Half-step Bilinear propagation #######
+
+        # Evolution by Taylor Series Expansion of the Bilinear Operator
+        # temp = self.walker_tensors.copy()
+        # for order_i in range(self.taylor_order):
+        #     temp = np.einsum('FGab,zGSbj->zFSaj', -0.5 * self.dt * self.MuQc, temp, optimize=True) / (order_i + 1.0)
+        #     self.walker_tensors += temp
+
+        # Evolution by Diagonalization of the Bilinear Operator
+        Ea,Ua               = np.linalg.eigh( self.aT_plus_a )
+        mu,Umu              = np.linalg.eigh( self.dipole_ao_polarized[0] )
+        exp_mua             = np.exp( -0.500 * self.dt * self.bilinear_factor[0] * np.einsum("F,a->Fa", Ea, mu) )
+        exp_bilinear        = np.einsum("FG,ab,Gb,bc,GH->FHac", Ua.T, Umu.T, exp_mua, Umu, Ua) # exp_mua is interpreted as a diagaonal matrix (GGbb)
+        self.walker_tensors = np.einsum('FGab,zGSbj->zFSaj', exp_bilinear, self.walker_tensors, optimize=True)
+
+        # aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
+        # aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
+        # aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
+        # aa1 = np.average( aa1, axis=0 ) # (NFock)
+        # print("DDD Prob. per Fock State =", aa1)
+
+        # OVLP = np.einsum( "zFSaj,zFSak->zSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, Spin, NMO, NMO)
+        # OVLP = np.linalg.det( OVLP ) # (w, Spin)
+        # OVLP = np.prod( OVLP, axis=-1 ) # (w)
+        #print( "OOOO", np.average(OVLP).real )
 
     def get_apply_background_mf_shift(self, h1e, eri, ltensor):
         from itertools import product
@@ -285,8 +341,8 @@ class QEDAFQMC(AFQMC):
         self.propagate_bilinear_coupling()
         #############################
 
-        # 2-body propagator propagation
-        # exp[(x-F) * L], F = sqrt(-dt) <L_n>
+        # # 2-body propagator propagation
+        # # exp[(x-F) * L], F = sqrt(-dt) <L_n>
         xi = np.random.normal(0, 1.0, size=(self.num_walkers, self.nfields) )
         two_body_op_power = 1j * np.sqrt(self.dt) * np.einsum('zn,nab->zab', xi - F, ltensor)
         temp = self.walker_tensors.copy()
