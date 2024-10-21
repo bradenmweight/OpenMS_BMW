@@ -214,7 +214,8 @@ class QEDAFQMC(AFQMC):
 
         Note: eri and h1e include the DSE terms
             If do_coherent_state == True, eri and MuQC will also be generated based on shifted dipole
-            Therefore, the energy computed here would be directly the CS Hamiltonian energy
+            Therefore, the energy computed here would be directly the CS Hamiltonian energy. 
+            No need to unshift.
         """
 
         # E_coul
@@ -243,44 +244,39 @@ class QEDAFQMC(AFQMC):
         wcaTa    = np.einsum("m,F->F", self.cavity_freq, np.arange(self.NFock)) # (NFock)
         evol_Hph = np.exp( -0.5 * self.dt * wcaTa ) # (NFock)
         # print( wcaTa )
-        # print( evol_Hph )
+        # print( evol_Hph ) # This looks correct.
+
+        """
+        aa1 checks the Fock-state probability
+        """
         #aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
         #aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
         #aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
         #aa1 = np.average( aa1, axis=0 ) # (NFock)
         #print("AAA Prob. per Fock State =", aa1)
         self.walker_tensors = np.einsum( "F,zFSaj->zFSaj", evol_Hph, self.walker_tensors )
+        """
+        aa1 checks the Fock-state probability
+        """
         #aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
         #aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
         #aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
         #aa1 = np.average( aa1, axis=0 ) # (NFock)
         #print("BBB Prob. per Fock State =", aa1)
 
-
-    # def propagate_bilinear_coupling( self ):
-
-    #     aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
-    #     aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
-    #     aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
-    #     aa1 = np.average( aa1, axis=0 ) # (NFock)
-    #     print("AAA Prob. per Fock State =", aa1)
-
-
-
-    #     aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
-    #     aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
-    #     aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
-    #     aa1 = np.average( aa1, axis=0 ) # (NFock)
-    #     print("BBB Prob. per Fock State =", aa1)
-
-
     def propagate_bilinear_coupling( self ):
 
+        """
+        OVLP checks the total wfn overlap
+        """
         # OVLP = np.einsum( "zFSaj,zFSak->zSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, Spin, NMO, NMO)
         # OVLP = np.linalg.det( OVLP ) # (w, Spin)
         # OVLP = np.prod( OVLP, axis=-1 ) # (w)
         # print( "AAA", np.average(OVLP).real )
 
+        """
+        aa1 checks the Fock-state probability
+        """
         # aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
         # aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
         # aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
@@ -295,6 +291,12 @@ class QEDAFQMC(AFQMC):
         #     temp = np.einsum('FGab,zGSbj->zFSaj', -0.5 * self.dt * self.MuQc, temp, optimize=True) / (order_i + 1.0)
         #     self.walker_tensors += temp
 
+        """
+        As a check, I rewrote the bilinear propagation in a different way.
+        Here, I first diagonalize the dipole operator in AO basis and then propagate the bilinear operator.
+        It gives me the same answer. Will be expensive for large N_AO. 
+        Though we could store the diagonalized dipole at the beginning of the simulation.
+        """
         # Evolution by Diagonalization of the Bilinear Operator
         Ea,Ua               = np.linalg.eigh( self.aT_plus_a )
         mu,Umu              = np.linalg.eigh( self.dipole_ao_polarized[0] )
@@ -302,12 +304,18 @@ class QEDAFQMC(AFQMC):
         exp_bilinear        = np.einsum("FG,ab,Gb,bc,GH->FHac", Ua.T, Umu.T, exp_mua, Umu, Ua) # exp_mua is interpreted as a diagaonal matrix (GGbb)
         self.walker_tensors = np.einsum('FGab,zGSbj->zFSaj', exp_bilinear, self.walker_tensors, optimize=True)
 
+        """
+        aa1 checks the Fock-state probability
+        """
         # aa1 = np.einsum( "zFSaj,zFSak->zFSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, NFock, Spin, NMO, NMO)
         # aa1 = np.linalg.det( aa1 ).real # (w, NFock, Spin)
         # aa1 = np.prod( aa1, axis=-1 ) # (w, NFock)
         # aa1 = np.average( aa1, axis=0 ) # (NFock)
         # print("DDD Prob. per Fock State =", aa1)
 
+        """
+        OVLP checks the total wfn overlap
+        """
         # OVLP = np.einsum( "zFSaj,zFSak->zSjk", self.walker_tensors.conj(), self.walker_tensors ) # (w, Spin, NMO, NMO)
         # OVLP = np.linalg.det( OVLP ) # (w, Spin)
         # OVLP = np.prod( OVLP, axis=-1 ) # (w)
